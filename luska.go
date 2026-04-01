@@ -7,8 +7,9 @@ import (
 	"golang.org/x/net/html"
 	"flag"
 	"strings"
-	//"os"
-	//"io"
+	"os"
+    "time"
+	"io"
 )
 type Form struct {
 Action string
@@ -72,7 +73,7 @@ func traverse(n *html.Node, base *url.URL, links *[]string, forms *[]Form) {
     }
 }
 
-func pars(uri string) {
+func pars(uri string,recurs bool,depr, depth int, term io.Writer, file io.Writer) {
 	req,err := http.Get(uri)
 	if !strings.HasSuffix(uri, "/") {
 		uri += "/"
@@ -95,35 +96,71 @@ func pars(uri string) {
 	var links []string
 	var forms []Form
 	traverse(doc, base, &links, &forms)
-	fmt.Println(base.Path)
+	fmt.Fprintf(term,"\n%s\n",base.Path)
+    for _, f := range forms {
+  
+        fmt.Fprintf(term, "|---[form] %s %s\n", f.Method, f.Action)
+        
+        var params []string
+        for _, inp := range f.Inputs {
+            fmt.Fprintln(term, "|   |---[field] "+inp)
+            
+            parts := strings.Split(inp, "=")
+            if len(parts) > 1 {
+                params = append(params, parts[1]+"=1") 
+            }
+        }
+
+        if len(params) > 0 {
+            connector := "?"
+            if strings.Contains(f.Action, "?") {
+                connector = "&"
+            }
+            fullFormUrl := f.Action + connector + strings.Join(params, "&")
+            fmt.Fprintln(file, fullFormUrl) 
+        }
+    }
 	for _, l := range links {
 		parsed, _ := url.Parse(l)
 		if parsed.Path != "" {
-			fmt.Println("|---" + parsed.Path)
+			fmt.Fprintln(term,"|---" + parsed.Path)
+            fmt.Fprintln(file, parsed.Scheme+"://"+parsed.Host+parsed.Path)
 			if parsed.RawQuery != "" {
 				for key, vals := range parsed.Query() {
-					fmt.Println("    |---[param] " + key + "=" + vals[0])
+					fmt.Fprintln(term,"|   |---[param] " + key + "=" + vals[0])
 				}
+                fmt.Fprintln(file, parsed.Scheme+"://"+parsed.Host+parsed.Path+"?"+parsed.RawQuery)
 			}
+            if recurs && depr < depth {
+                pars(l, recurs, depr+1, depth,term,file)
+            }
 		}
 	}
-	for _, f := range forms {
-		fmt.Printf("|---[form] %s %s\n", f.Method, f.Action)
-		for _, inp := range f.Inputs {
-			fmt.Println("    |---[field] " + inp)
-		}
-	}
+	
 }
 
 
 
 func main() {
 	u := flag.String("u","","url")
-	//r := flag.Bool("r",false,"recursion")
-	//rd := flag.Int("rd",0,"recursion depth")
+	r := flag.Bool("r",false,"recursion")
+	rd := flag.Int("rd",0,"recursion depth")
 	flag.Parse()
 
-	
-	
-	pars(*u)
+    if *u == "" {
+        fmt.Println("ERROR: please enter url")
+        return
+    }
+
+	parsed, _ := url.Parse(*u)
+    date := time.Now().Format("2006-01-02_15-04-05")
+    filename := "output/" + parsed.Hostname() + "|" + date + ".txt"
+    f, err := os.Create(filename)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+    defer f.Close()
+
+	pars(*u,*r,0,*rd,os.Stdout,f)
 }

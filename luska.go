@@ -251,15 +251,13 @@ func main() {
 
 	if *pentest {
 		fmt.Println("\n[*] Starting pentest scan...")
-		
-		// Передаем флаги в pentest
+
 		pentestArgs := []string{
 			"-f", crawlPath,
 			"-host", parsed.Hostname(),
 			"-date", date,
 		}
-		
-		// Передаем skip-phase если он установлен
+
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
 		}

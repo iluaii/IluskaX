@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -18,6 +20,104 @@ type Form struct {
 	Action string
 	Method string
 	Inputs []string
+}
+
+type Crawler struct {
+	mu         sync.Mutex
+	visited    map[string]bool
+	disallowed []string
+	limiter    <-chan time.Time
+	client     *http.Client
+	term       io.Writer
+	file       io.Writer
+}
+
+func newCrawler(ratePerSec int, term io.Writer, file io.Writer) *Crawler {
+	return &Crawler{
+		visited: make(map[string]bool),
+		limiter: time.Tick(time.Second / time.Duration(ratePerSec)),
+		client:  &http.Client{Timeout: 10 * time.Second},
+		term:    term,
+		file:    file,
+	}
+}
+
+func (c *Crawler) isVisited(uri string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.visited[uri]
+}
+
+func (c *Crawler) markVisited(uri string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.visited[uri] = true
+}
+
+func (c *Crawler) writeLine(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Fprintln(c.file, line)
+}
+
+func (c *Crawler) log(format string, args ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Fprintf(c.term, format, args...)
+}
+
+func (c *Crawler) fetchRobots(base *url.URL) {
+	robotsURL := base.Scheme + "://" + base.Host + "/robots.txt"
+	resp, err := c.client.Get(robotsURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return
+	}
+
+	fmt.Fprintf(c.term, "\n[ROBOTS] Fetched robots.txt from %s\n", base.Host)
+
+	sc := bufio.NewScanner(resp.Body)
+	userAgentMatch := false
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		switch strings.ToLower(key) {
+		case "user-agent":
+			userAgentMatch = val == "*"
+		case "disallow":
+			if userAgentMatch && val != "" {
+				c.disallowed = append(c.disallowed, val)
+				fmt.Fprintf(c.term, "├─ [DISALLOW] %s\n", val)
+			}
+		}
+	}
+	fmt.Fprintf(c.term, "└─ %d disallowed paths loaded\n", len(c.disallowed))
+}
+
+func (c *Crawler) isDisallowed(uri string) bool {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+	for _, d := range c.disallowed {
+		if strings.HasPrefix(parsed.Path, d) {
+			return true
+		}
+	}
+	return false
 }
 
 func traverse(n *html.Node, base *url.URL, links *[]string, forms *[]Form) {
@@ -75,16 +175,16 @@ func traverse(n *html.Node, base *url.URL, links *[]string, forms *[]Form) {
 						}
 					}
 				}
-				for c := node.FirstChild; c != nil; c = c.NextSibling {
-					collectInputs(c)
+				for child := node.FirstChild; child != nil; child = child.NextSibling {
+					collectInputs(child)
 				}
 			}
 			collectInputs(n)
 			*forms = append(*forms, f)
 		}
 	}
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		traverse(c, base, links, forms)
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		traverse(child, base, links, forms)
 	}
 }
 
@@ -97,37 +197,50 @@ func isSkipped(uri string, skipList []string) bool {
 	return false
 }
 
-func pars(uri string, recurs bool, depr, depth int, term io.Writer, file io.Writer, visited map[string]bool, skipList []string) {
-	if visited[uri] {
+func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []string, wg *sync.WaitGroup, sem chan struct{}) {
+	if wg != nil {
+		defer wg.Done()
+	}
+	if sem != nil {
+		defer func() { <-sem }()
+	}
+
+	if c.isVisited(uri) {
 		return
 	}
-	visited[uri] = true
+	c.markVisited(uri)
 
 	if !strings.HasSuffix(uri, "/") {
 		uri += "/"
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := client.Get(uri)
-	if err != nil {
-		fmt.Fprintf(term, "  [ERROR] Failed to fetch %s: %v\n", uri, err)
+	if c.isDisallowed(uri) {
+		c.log("  [ROBOTS] Skipped disallowed: %s\n", uri)
 		return
 	}
-	defer req.Body.Close()
 
-	if req.StatusCode != 200 {
-		fmt.Fprintf(term, "  [WARN] HTTP %d: %s\n", req.StatusCode, uri)
+	<-c.limiter
+
+	resp, err := c.client.Get(uri)
+	if err != nil {
+		c.log("  [ERROR] Failed to fetch %s: %v\n", uri, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		c.log("  [WARN] HTTP %d: %s\n", resp.StatusCode, uri)
 	}
 
-	doc, err := html.Parse(req.Body)
+	doc, err := html.Parse(resp.Body)
 	if err != nil {
-		fmt.Fprintf(term, "  [ERROR] Failed to parse HTML: %v\n", err)
+		c.log("  [ERROR] Failed to parse HTML: %v\n", err)
 		return
 	}
 
 	base, err := url.Parse(uri)
 	if err != nil {
-		fmt.Fprintf(term, "  [ERROR] Invalid URL: %v\n", err)
+		c.log("  [ERROR] Invalid URL: %v\n", err)
 		return
 	}
 
@@ -135,17 +248,17 @@ func pars(uri string, recurs bool, depr, depth int, term io.Writer, file io.Writ
 	var forms []Form
 	traverse(doc, base, &links, &forms)
 
-	fmt.Fprintf(term, "\n[CRAWL] %s (Depth: %d)\n", base.Path, depr)
-	fmt.Fprintf(term, "├─ Status: OK, Forms: %d, Links: %d\n", len(forms), len(links))
+	c.log("\n[CRAWL] %s (Depth: %d)\n", base.Path, depr)
+	c.log("├─ Status: OK, Forms: %d, Links: %d\n", len(forms), len(links))
 
 	if len(forms) > 0 {
-		fmt.Fprintf(term, "├─ FORMS:\n")
+		c.log("├─ FORMS:\n")
 		for i, f := range forms {
-			fmt.Fprintf(term, "│  ├─ [%d] %s %s\n", i+1, f.Method, f.Action)
+			c.log("│  ├─ [%d] %s %s\n", i+1, f.Method, f.Action)
 			var params []string
 			for _, inp := range f.Inputs {
 				parts := strings.Split(inp, "=")
-				fmt.Fprintf(term, "│  │  ├─ %s\n", inp)
+				c.log("│  │  ├─ %s\n", inp)
 				if len(parts) > 1 {
 					params = append(params, parts[1]+"=1")
 				}
@@ -155,37 +268,79 @@ func pars(uri string, recurs bool, depr, depth int, term io.Writer, file io.Writ
 				if strings.Contains(f.Action, "?") {
 					connector = "&"
 				}
-				fullFormUrl := f.Action + connector + strings.Join(params, "&")
-				fmt.Fprintln(file, fullFormUrl)
+				c.writeLine(f.Action + connector + strings.Join(params, "&"))
 			}
 		}
 	}
 
 	if len(links) > 0 {
-		fmt.Fprintf(term, "├─ LINKS:\n")
+		c.log("├─ LINKS:\n")
+		var childWg sync.WaitGroup
 		for i, l := range links {
 			parsed, _ := url.Parse(l)
-			if parsed.Path != "" && parsed.Host != "" {
-				if isSkipped(l, skipList) {
-					fmt.Fprintf(term, "│  ├─ [%d] %s [SKIPPED]\n", i+1, parsed.Path)
-					continue
-				}
-				fmt.Fprintf(term, "│  ├─ [%d] %s\n", i+1, parsed.Path)
-				fmt.Fprintln(file, parsed.Scheme+"://"+parsed.Host+parsed.Path)
+			if parsed.Path == "" || parsed.Host == "" {
+				continue
+			}
+			if isSkipped(l, skipList) {
+				c.log("│  ├─ [%d] %s [SKIPPED]\n", i+1, parsed.Path)
+				continue
+			}
+			c.log("│  ├─ [%d] %s\n", i+1, parsed.Path)
+			c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path)
 
-				if parsed.RawQuery != "" {
-					for key, vals := range parsed.Query() {
-						fmt.Fprintf(term, "│  │  └─ param: %s=%s\n", key, vals[0])
-					}
-					fmt.Fprintln(file, parsed.Scheme+"://"+parsed.Host+parsed.Path+"?"+parsed.RawQuery)
+			if parsed.RawQuery != "" {
+				for key, vals := range parsed.Query() {
+					c.log("│  │  └─ param: %s=%s\n", key, vals[0])
 				}
+				c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path + "?" + parsed.RawQuery)
+			}
 
-				if recurs && depr < depth {
-					pars(l, recurs, depr+1, depth, term, file, visited, skipList)
-				}
+			if recurs && depr < depth && !c.isVisited(l) {
+				childWg.Add(1)
+				sem <- struct{}{}
+				go c.pars(l, recurs, depr+1, depth, skipList, &childWg, sem)
 			}
 		}
+		childWg.Wait()
 	}
+}
+
+func subdomainEnum(hostname string, crawlFile *os.File, term io.Writer) []string {
+	fmt.Fprintln(term, "\n"+strings.Repeat("=", 60))
+	fmt.Fprintf(term, "[PHASE 0] SUBDOMAIN ENUMERATION: %s\n", hostname)
+	fmt.Fprintln(term, strings.Repeat("=", 60))
+
+	cmd := exec.Command("subfinder", "-d", hostname, "-silent")
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(term, "[ERROR] subfinder failed: %v\n", err)
+		fmt.Fprintln(term, "[WARN] Make sure subfinder is installed: go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest")
+		return nil
+	}
+
+	var found []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		sub := strings.TrimSpace(line)
+		if sub == "" {
+			continue
+		}
+		found = append(found, sub)
+	}
+
+	if len(found) == 0 {
+		fmt.Fprintln(term, "├─ No subdomains found")
+		fmt.Fprintln(term, "└─ Phase 0 complete")
+		return nil
+	}
+
+	fmt.Fprintf(term, "├─ Found %d subdomains:\n", len(found))
+	for _, sub := range found {
+		fmt.Fprintf(term, "│  ├─ %s\n", sub)
+		fmt.Fprintf(crawlFile, "https://%s/\n", sub)
+	}
+	fmt.Fprintln(term, "└─ Phase 0 complete, subdomains added to crawl file")
+
+	return found
 }
 
 func main() {
@@ -193,18 +348,28 @@ func main() {
 	recursive := flag.Bool("r", false, "Enable recursive crawling")
 	maxDepth := flag.Int("rd", 0, "Maximum recursion depth")
 	pentest := flag.Bool("ps", false, "Run pentest scan after crawl")
-	skipFlag := flag.String("skip", "", "Comma-separated list of path patterns to skip (e.g. delete,remove,logout)")
-	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (1=SQLi,2=NUCLEI,3=SQLMap,4=XSS) e.g. 2,4")
+	subdomains := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
+	rateLimit := flag.Int("rate", 10, "Requests per second (rate limit)")
+	concurrency := flag.Int("c", 5, "Max concurrent goroutines for crawling")
+	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
+	skipFlag := flag.String("skip", "", "Comma-separated list of path patterns to skip")
+	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0=Subdomains,1=SQLi,2=NUCLEI,3=SQLMap,4=XSS,5=Headers)")
 	flag.Parse()
 
 	if *targetURL == "" {
 		fmt.Println("ERROR: please provide URL with -u flag")
-		fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-skip <patterns>] [-skip-phase <phases>]")
+		fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-ignore-robots] [-skip <patterns>] [-skip-phase <phases>]")
+		fmt.Println("\nFlags:")
+		fmt.Println("  -rate          Requests per second (default: 10)")
+		fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
+		fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 		fmt.Println("\nPhases:")
+		fmt.Println("  0 = Subdomain Enumeration (subfinder)")
 		fmt.Println("  1 = Quick SQLi Test")
 		fmt.Println("  2 = NUCLEI Template Scan")
 		fmt.Println("  3 = SQLMap Deep Scan")
 		fmt.Println("  4 = Dalfox XSS Scan")
+		fmt.Println("  5 = Header & Cookie Analysis")
 		return
 	}
 
@@ -236,13 +401,32 @@ func main() {
 
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Printf("[*] CRAWLING STARTED: %s\n", *targetURL)
+	fmt.Printf("[*] RATE LIMIT: %d req/s | CONCURRENCY: %d\n", *rateLimit, *concurrency)
 	if len(skipList) > 0 {
 		fmt.Printf("[*] SKIPPING PATTERNS: %s\n", strings.Join(skipList, ", "))
 	}
 	fmt.Println(strings.Repeat("=", 60))
 
-	visited := make(map[string]bool)
-	pars(*targetURL, *recursive, 0, *maxDepth, os.Stdout, f, visited, skipList)
+	if *subdomains {
+		subdomainEnum(parsed.Hostname(), f, os.Stdout)
+	}
+
+	crawler := newCrawler(*rateLimit, os.Stdout, f)
+
+	if !*ignoreRobots {
+		crawler.fetchRobots(parsed)
+	} else {
+		fmt.Println("[*] robots.txt ignored")
+	}
+
+	sem := make(chan struct{}, *concurrency)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	sem <- struct{}{}
+	go crawler.pars(*targetURL, *recursive, 0, *maxDepth, skipList, &wg, sem)
+	wg.Wait()
+
 	f.Sync()
 
 	fmt.Println("\n" + strings.Repeat("=", 60))
@@ -261,7 +445,7 @@ func main() {
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
 		}
-		
+
 		cmd := exec.Command("./pentest", pentestArgs...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

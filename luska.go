@@ -367,17 +367,21 @@ func main() {
 	rateLimit := flag.Int("rate", 10, "Requests per second (rate limit)")
 	concurrency := flag.Int("c", 5, "Max concurrent goroutines for crawling")
 	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
+	sqlmapLevel := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
+	sqlmapRisk := flag.Int("sqlmap-risk", 0, "SQLMap starting risk (1-3), 0 = auto")
 	skipFlag := flag.String("skip", "", "Comma-separated list of path patterns to skip")
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0=Subdomains,1=SQLi,2=NUCLEI,3=SQLMap,4=XSS,5=Headers)")
 	flag.Parse()
 
 	if *targetURL == "" {
 		fmt.Println("ERROR: please provide URL with -u flag")
-		fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-ignore-robots] [-skip <patterns>] [-skip-phase <phases>]")
+		fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-ignore-robots] [-sqlmap-level <1-5>] [-sqlmap-risk <1-3>] [-skip <patterns>] [-skip-phase <phases>]")
 		fmt.Println("\nFlags:")
 		fmt.Println("  -rate          Requests per second (default: 10)")
 		fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
 		fmt.Println("  -ignore-robots Skip robots.txt restrictions")
+		fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
+		fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
 		fmt.Println("\nPhases:")
 		fmt.Println("  0 = Subdomain Enumeration (subfinder)")
 		fmt.Println("  1 = Quick SQLi Test")
@@ -459,6 +463,12 @@ func main() {
 
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
+		}
+		if *sqlmapLevel > 0 {
+			pentestArgs = append(pentestArgs, "-sqlmap-level", fmt.Sprintf("%d", *sqlmapLevel))
+		}
+		if *sqlmapRisk > 0 {
+			pentestArgs = append(pentestArgs, "-sqlmap-risk", fmt.Sprintf("%d", *sqlmapRisk))
 		}
 
 		cmd := exec.Command("./pentest", pentestArgs...)

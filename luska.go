@@ -275,6 +275,7 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 
 	if len(links) > 0 {
 		c.log("├─ LINKS:\n")
+		seenEndpoints := map[string]bool{}
 		var childWg sync.WaitGroup
 		for i, l := range links {
 			parsed, _ := url.Parse(l)
@@ -285,6 +286,20 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 				c.log("│  ├─ [%d] %s [SKIPPED]\n", i+1, parsed.Path)
 				continue
 			}
+
+			endpointKey := parsed.Host + parsed.Path
+			if parsed.RawQuery != "" {
+				var paramNames []string
+				for key := range parsed.Query() {
+					paramNames = append(paramNames, key)
+				}
+				endpointKey += "?" + strings.Join(paramNames, "&")
+			}
+			if seenEndpoints[endpointKey] {
+				continue
+			}
+			seenEndpoints[endpointKey] = true
+
 			c.log("│  ├─ [%d] %s\n", i+1, parsed.Path)
 			c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path)
 

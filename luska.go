@@ -369,6 +369,7 @@ func main() {
 	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
 	sqlmapLevel := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
 	sqlmapRisk := flag.Int("sqlmap-risk", 0, "SQLMap starting risk (1-3), 0 = auto")
+	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning (e.g. 'session=abc123')")
 	skipFlag := flag.String("skip", "", "Comma-separated list of path patterns to skip")
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0=Subdomains,1=SQLi,2=NUCLEI,3=SQLMap,4=XSS,5=Headers)")
 	flag.Parse()
@@ -382,6 +383,7 @@ func main() {
 		fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 		fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
 		fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
+		fmt.Println("  -cookie        Cookie for authenticated scanning (e.g. 'session=abc123')")
 		fmt.Println("\nPhases:")
 		fmt.Println("  0 = Subdomain Enumeration (subfinder)")
 		fmt.Println("  1 = Quick SQLi Test")
@@ -469,6 +471,9 @@ func main() {
 		}
 		if *sqlmapRisk > 0 {
 			pentestArgs = append(pentestArgs, "-sqlmap-risk", fmt.Sprintf("%d", *sqlmapRisk))
+		}
+		if *cookie != "" {
+			pentestArgs = append(pentestArgs, "-cookie", *cookie)
 		}
 
 		cmd := exec.Command("./pentest", pentestArgs...)

@@ -30,16 +30,26 @@ type Crawler struct {
 	client     *http.Client
 	term       io.Writer
 	file       io.Writer
+	scopeHost  string
 }
 
-func newCrawler(ratePerSec int, term io.Writer, file io.Writer) *Crawler {
+func newCrawler(ratePerSec int, term io.Writer, file io.Writer, scopeHost string) *Crawler {
 	return &Crawler{
-		visited: make(map[string]bool),
-		limiter: time.Tick(time.Second / time.Duration(ratePerSec)),
-		client:  &http.Client{Timeout: 10 * time.Second},
-		term:    term,
-		file:    file,
+		visited:   make(map[string]bool),
+		limiter:   time.Tick(time.Second / time.Duration(ratePerSec)),
+		client:    &http.Client{Timeout: 10 * time.Second},
+		term:      term,
+		file:      file,
+		scopeHost: scopeHost,
 	}
+}
+
+func (c *Crawler) inScope(uri string) bool {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+	return parsed.Host == c.scopeHost
 }
 
 func (c *Crawler) isVisited(uri string) bool {
@@ -287,6 +297,11 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 				continue
 			}
 
+			if !c.inScope(l) {
+				c.log("│  ├─ [%d] %s [OUT OF SCOPE]\n", i+1, parsed.Host+parsed.Path)
+				continue
+			}
+
 			endpointKey := parsed.Host + parsed.Path
 			if parsed.RawQuery != "" {
 				var paramNames []string
@@ -434,7 +449,7 @@ func main() {
 		subdomainEnum(parsed.Hostname(), f, os.Stdout)
 	}
 
-	crawler := newCrawler(*rateLimit, os.Stdout, f)
+	crawler := newCrawler(*rateLimit, os.Stdout, f, parsed.Host)
 
 	if !*ignoreRobots {
 		crawler.fetchRobots(parsed)

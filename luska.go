@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,25 +26,42 @@ type Form struct {
 }
 
 type Crawler struct {
-	mu         sync.Mutex
-	visited    map[string]bool
-	disallowed []string
-	limiter    <-chan time.Time
-	client     *http.Client
-	term       io.Writer
-	file       io.Writer
-	scopeHost  string
+	mu           sync.Mutex
+	visited      map[string]bool
+	visitedPages []string
+	disallowed   []string
+	ticker       *time.Ticker
+	limiter      <-chan time.Time
+	client       *http.Client
+	term         io.Writer
+	file         io.Writer
+	scopeHost    string
 }
 
 func newCrawler(ratePerSec int, term io.Writer, file io.Writer, scopeHost string) *Crawler {
+	ticker := time.NewTicker(time.Second / time.Duration(ratePerSec))
 	return &Crawler{
-		visited:   make(map[string]bool),
-		limiter:   time.Tick(time.Second / time.Duration(ratePerSec)),
-		client:    &http.Client{Timeout: 10 * time.Second},
+		visited:      make(map[string]bool),
+		visitedPages: []string{},
+		ticker:       ticker,
+		limiter:      ticker.C,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("too many redirects")
+				}
+				return nil
+			},
+		},
 		term:      term,
 		file:      file,
 		scopeHost: scopeHost,
 	}
+}
+
+func (c *Crawler) stop() {
+	c.ticker.Stop()
 }
 
 func (c *Crawler) inScope(uri string) bool {
@@ -49,7 +69,9 @@ func (c *Crawler) inScope(uri string) bool {
 	if err != nil {
 		return false
 	}
-	return parsed.Host == c.scopeHost
+	host := strings.TrimPrefix(parsed.Host, "www.")
+	scope := strings.TrimPrefix(c.scopeHost, "www.")
+	return host == scope
 }
 
 func (c *Crawler) isVisited(uri string) bool {
@@ -112,6 +134,9 @@ func (c *Crawler) fetchRobots(base *url.URL) {
 				c.disallowed = append(c.disallowed, val)
 				fmt.Fprintf(c.term, "├─ [DISALLOW] %s\n", val)
 			}
+		
+		case "sitemap":
+			fmt.Fprintf(c.term, "├─ [SITEMAP] %s\n", val)
 		}
 	}
 	fmt.Fprintf(c.term, "└─ %d disallowed paths loaded\n", len(c.disallowed))
@@ -138,6 +163,18 @@ func traverse(n *html.Node, base *url.URL, links *[]string, forms *[]Form) {
 				if attr.Key == "href" {
 					link, err := url.Parse(attr.Val)
 					if err == nil {
+						resolved := base.ResolveReference(link)
+						resolved.Fragment = ""
+						*links = append(*links, resolved.String())
+					}
+				}
+			}
+	
+		case "script", "iframe":
+			for _, attr := range n.Attr {
+				if attr.Key == "src" && attr.Val != "" {
+					link, err := url.Parse(attr.Val)
+					if err == nil {
 						*links = append(*links, base.ResolveReference(link).String())
 					}
 				}
@@ -157,6 +194,9 @@ func traverse(n *html.Node, base *url.URL, links *[]string, forms *[]Form) {
 			}
 			if f.Method == "" {
 				f.Method = "GET"
+			}
+			if f.Action == "" {
+				f.Action = base.String()
 			}
 			var collectInputs func(*html.Node)
 			collectInputs = func(node *html.Node) {
@@ -207,7 +247,7 @@ func isSkipped(uri string, skipList []string) bool {
 	return false
 }
 
-func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []string, wg *sync.WaitGroup, sem chan struct{}) {
+func (c *Crawler) pars(ctx context.Context, uri string, recurs bool, depr, depth int, skipList []string, wg *sync.WaitGroup, sem chan struct{}) {
 	if wg != nil {
 		defer wg.Done()
 	}
@@ -215,13 +255,24 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 		defer func() { <-sem }()
 	}
 
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	if c.isVisited(uri) {
 		return
 	}
 	c.markVisited(uri)
+	c.mu.Lock()
+	c.visitedPages = append(c.visitedPages, uri)
+	c.mu.Unlock()
 
-	if !strings.HasSuffix(uri, "/") {
-		uri += "/"
+	parsed0, err := url.Parse(uri)
+	if err == nil && parsed0.Path == "" {
+		parsed0.Path = "/"
+		uri = parsed0.String()
 	}
 
 	if c.isDisallowed(uri) {
@@ -231,7 +282,15 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 
 	<-c.limiter
 
-	resp, err := c.client.Get(uri)
+	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
+	if err != nil {
+		c.log("  [ERROR] Bad request %s: %v\n", uri, err)
+		return
+	}
+	
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+
+	resp, err := c.client.Do(req)
 	if err != nil {
 		c.log("  [ERROR] Failed to fetch %s: %v\n", uri, err)
 		return
@@ -242,7 +301,9 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 		c.log("  [WARN] HTTP %d: %s\n", resp.StatusCode, uri)
 	}
 
-	doc, err := html.Parse(resp.Body)
+	limitedBody := io.LimitReader(resp.Body, 10*1024*1024) 
+
+	doc, err := html.Parse(limitedBody)
 	if err != nil {
 		c.log("  [ERROR] Failed to parse HTML: %v\n", err)
 		return
@@ -259,7 +320,7 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 	traverse(doc, base, &links, &forms)
 
 	c.log("\n[CRAWL] %s (Depth: %d)\n", base.Path, depr)
-	c.log("├─ Status: OK, Forms: %d, Links: %d\n", len(forms), len(links))
+	c.log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
 
 	if len(forms) > 0 {
 		c.log("├─ FORMS:\n")
@@ -289,7 +350,11 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 		var childWg sync.WaitGroup
 		for i, l := range links {
 			parsed, _ := url.Parse(l)
-			if parsed.Path == "" || parsed.Host == "" {
+			if parsed == nil || parsed.Path == "" || parsed.Host == "" {
+				continue
+			}
+			lLower := strings.ToLower(parsed.Path)
+			if isStaticAsset(lLower) {
 				continue
 			}
 			if isSkipped(l, skipList) {
@@ -308,6 +373,7 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 				for key := range parsed.Query() {
 					paramNames = append(paramNames, key)
 				}
+				sort.Strings(paramNames) 
 				endpointKey += "?" + strings.Join(paramNames, "&")
 			}
 			if seenEndpoints[endpointKey] {
@@ -316,23 +382,41 @@ func (c *Crawler) pars(uri string, recurs bool, depr, depth int, skipList []stri
 			seenEndpoints[endpointKey] = true
 
 			c.log("│  ├─ [%d] %s\n", i+1, parsed.Path)
-			c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path)
+			if parsed.Scheme != "" && parsed.Host != "" {
+				c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path)
+			}
 
 			if parsed.RawQuery != "" {
 				for key, vals := range parsed.Query() {
 					c.log("│  │  └─ param: %s=%s\n", key, vals[0])
 				}
-				c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path + "?" + parsed.RawQuery)
+				if parsed.Scheme != "" && parsed.Host != "" {
+					c.writeLine(parsed.Scheme + "://" + parsed.Host + parsed.Path + "?" + parsed.RawQuery)
+				}
 			}
 
 			if recurs && depr < depth && !c.isVisited(l) {
 				childWg.Add(1)
 				sem <- struct{}{}
-				go c.pars(l, recurs, depr+1, depth, skipList, &childWg, sem)
+				go c.pars(ctx, l, recurs, depr+1, depth, skipList, &childWg, sem)
 			}
 		}
 		childWg.Wait()
 	}
+}
+
+func isStaticAsset(path string) bool {
+	staticExts := []string{
+		".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+		".css", ".woff", ".woff2", ".ttf", ".eot", ".otf",
+		".mp4", ".mp3", ".avi", ".mov", ".pdf", ".zip", ".gz",
+	}
+	for _, ext := range staticExts {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func subdomainEnum(hostname string, crawlFile *os.File, term io.Writer) []string {
@@ -373,6 +457,262 @@ func subdomainEnum(hostname string, crawlFile *os.File, term io.Writer) []string
 	return found
 }
 
+type JSEndpoint struct {
+	URL    string
+	Params []string
+	Source string
+}
+
+var (
+	reStrPath = regexp.MustCompile(`["'](/[a-zA-Z0-9_\-/]{2,}(?:\?[a-zA-Z0-9_\-=&]*)?)["']`)
+	reFetchQuoted   = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*[\"']([^\"'`]+)[\"']")
+	reFetchTemplate = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*`([^`]+)`")
+	reXHR           = regexp.MustCompile(`\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["']([^"']+)["']`)
+	reParam         = regexp.MustCompile(`[?&]([a-zA-Z_][a-zA-Z0-9_]*)=`)
+	reTemplateVar   = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
+	reAPIVar = regexp.MustCompile(`(?:apiUrl|endpoint|baseURL|apiPath|path)\s*=\s*["']([^"']+)["']`)
+)
+
+func extractParams(path string) []string {
+	matches := reParam.FindAllStringSubmatch(path, -1)
+	seen := map[string]bool{}
+	var params []string
+	for _, m := range matches {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			params = append(params, m[1])
+		}
+	}
+	return params
+}
+
+func parseJSBody(body, sourceURL string, base *url.URL) []JSEndpoint {
+	seen := map[string]bool{}
+	var results []JSEndpoint
+
+	addEndpoint := func(rawPath, src string) {
+		ref, err := url.Parse(rawPath)
+		if err != nil {
+			return
+		}
+		resolved := base.ResolveReference(ref).String()
+		if seen[resolved] {
+			return
+		}
+		lower := strings.ToLower(resolved)
+		for _, ext := range []string{".png", ".jpg", ".gif", ".svg", ".css", ".woff", ".ico", "data:"} {
+			if strings.Contains(lower, ext) {
+				return
+			}
+		}
+		seen[resolved] = true
+		params := extractParams(rawPath)
+		results = append(results, JSEndpoint{URL: resolved, Params: params, Source: src})
+	}
+
+	for _, m := range reFetchQuoted.FindAllStringSubmatch(body, -1) {
+		addEndpoint(m[1], "fetch/axios")
+	}
+	for _, m := range reFetchTemplate.FindAllStringSubmatch(body, -1) {
+		raw := m[1]
+		varMatches := reTemplateVar.FindAllStringSubmatch(raw, -1)
+		var extraParams []string
+		for _, vm := range varMatches {
+			name := vm[1]
+			if idx := strings.IndexAny(name, ".("); idx != -1 {
+				name = name[:idx]
+			}
+			if name != "" {
+				extraParams = append(extraParams, name)
+			}
+		}
+		clean := reTemplateVar.ReplaceAllString(raw, "1")
+		ref, err := url.Parse(clean)
+		if err != nil {
+			continue
+		}
+		resolved := base.ResolveReference(ref).String()
+		lower := strings.ToLower(resolved)
+		skip := false
+		for _, ext := range []string{".png", ".jpg", ".gif", ".svg", ".css", ".woff", ".ico", "data:"} {
+			if strings.Contains(lower, ext) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		params := extractParams(clean)
+		seen2 := map[string]bool{}
+		for _, p := range params {
+			seen2[p] = true
+		}
+		for _, p := range extraParams {
+			if !seen2[p] {
+				seen2[p] = true
+				params = append(params, p)
+			}
+		}
+		key := resolved
+		if !seen[key] {
+			seen[key] = true
+			results = append(results, JSEndpoint{URL: resolved, Params: params, Source: "fetch/template"})
+		}
+	}
+	for _, m := range reXHR.FindAllStringSubmatch(body, -1) {
+		addEndpoint(m[1], "XHR")
+	}
+	for _, m := range reStrPath.FindAllStringSubmatch(body, -1) {
+		addEndpoint(m[1], "string")
+	}
+
+	for _, m := range reAPIVar.FindAllStringSubmatch(body, -1) {
+		addEndpoint(m[1], "apiVar")
+	}
+
+	return results
+}
+
+func (c *Crawler) scanJS(term io.Writer, file io.Writer) {
+	fmt.Fprintln(term, "\n"+strings.Repeat("═", 60))
+	fmt.Fprintln(term, "  JS PARSER STARTED")
+	fmt.Fprintln(term, strings.Repeat("═", 60))
+
+	if len(c.visitedPages) == 0 {
+		fmt.Fprintln(term, "└─ No pages to scan")
+		return
+	}
+
+	type jsSource struct {
+		body    string
+		pageURL string
+		srcURL  string
+	}
+	var jsSources []jsSource
+	seenScripts := map[string]bool{}
+
+	for _, pageURL := range c.visitedPages {
+		<-c.limiter
+		req, err := http.NewRequest("GET", pageURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+		resp, err := c.client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		base, err := url.Parse(pageURL)
+		if err != nil {
+			continue
+		}
+
+		doc, err := html.Parse(strings.NewReader(string(body)))
+		if err != nil {
+			continue
+		}
+
+		var walkScripts func(*html.Node)
+		walkScripts = func(n *html.Node) {
+			if n.Type == html.ElementNode && n.Data == "script" {
+				for _, attr := range n.Attr {
+					if attr.Key == "src" && attr.Val != "" {
+						ref, err := url.Parse(attr.Val)
+						if err != nil {
+							continue
+						}
+						scriptURL := base.ResolveReference(ref).String()
+						if seenScripts[scriptURL] {
+							break
+						}
+						seenScripts[scriptURL] = true
+						<-c.limiter
+						sr, err := c.client.Get(scriptURL)
+						if err != nil {
+							break
+						}
+						sb, err := io.ReadAll(io.LimitReader(sr.Body, 5*1024*1024))
+						sr.Body.Close()
+						if err != nil {
+							break
+						}
+						jsSources = append(jsSources, jsSource{body: string(sb), pageURL: pageURL, srcURL: scriptURL})
+						break
+					}
+				}
+				if n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
+					inline := strings.TrimSpace(n.FirstChild.Data)
+					if inline != "" {
+						key := pageURL + "#inline" + fmt.Sprintf("%d", len(jsSources))
+						if !seenScripts[key] {
+							seenScripts[key] = true
+							jsSources = append(jsSources, jsSource{body: inline, pageURL: pageURL, srcURL: "inline"})
+						}
+					}
+				}
+			}
+			for child := n.FirstChild; child != nil; child = child.NextSibling {
+				walkScripts(child)
+			}
+		}
+		walkScripts(doc)
+	}
+
+	fmt.Fprintf(term, "├─ JS files/blocks found: %d\n", len(jsSources))
+
+	if len(jsSources) == 0 {
+		fmt.Fprintln(term, "└─ No JS to analyze")
+		return
+	}
+
+	allEndpoints := map[string]JSEndpoint{}
+	for _, js := range jsSources {
+		base, _ := url.Parse(js.pageURL)
+		endpoints := parseJSBody(js.body, js.srcURL, base)
+		for _, ep := range endpoints {
+			allEndpoints[ep.URL] = ep
+		}
+	}
+
+	if len(allEndpoints) == 0 {
+		fmt.Fprintln(term, "└─ No endpoints found in JS")
+		return
+	}
+
+	fmt.Fprintf(term, "├─ Endpoints found: %d\n", len(allEndpoints))
+	fmt.Fprintln(term, "│")
+	fmt.Fprintf(term, "│  %-70s %-14s %s\n", "ENDPOINT", "SOURCE", "PARAMS")
+	fmt.Fprintf(term, "│  %s\n", strings.Repeat("─", 100))
+
+	for _, ep := range allEndpoints {
+		params := "-"
+		if len(ep.Params) > 0 {
+			params = strings.Join(ep.Params, ", ")
+		}
+		fmt.Fprintf(term, "│  %-70s %-14s %s\n", ep.URL, ep.Source, params)
+		fmt.Fprintln(file, ep.URL)
+		if len(ep.Params) > 0 {
+			if !strings.Contains(ep.URL, "?") {
+				paramStr := make([]string, len(ep.Params))
+				for i, p := range ep.Params {
+					paramStr[i] = p + "=1"
+				}
+				fmt.Fprintln(file, ep.URL+"?"+strings.Join(paramStr, "&"))
+			}
+		}
+	}
+
+	fmt.Fprintln(term, "│")
+	fmt.Fprintln(term, "└─ JS parse complete")
+}
+
 func main() {
 	targetURL := flag.String("u", "", "Target URL to crawl")
 	recursive := flag.Bool("r", false, "Enable recursive crawling")
@@ -388,11 +728,12 @@ func main() {
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap (-r flag)")
 	skipFlag := flag.String("skip", "", "Comma-separated list of path patterns to skip")
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0=Subdomains,1=SQLi,2=NUCLEI,3=SQLMap,4=XSS,5=Headers)")
+	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
 	flag.Parse()
 
 	if *targetURL == "" {
 		fmt.Println("ERROR: please provide URL with -u flag")
-		fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-ignore-robots] [-sqlmap-level <1-5>] [-sqlmap-risk <1-3>] [-skip <patterns>] [-skip-phase <phases>]")
+		fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-ignore-robots] [-sqlmap-level <1-5>] [-sqlmap-risk <1-3>] [-skip <patterns>] [-skip-phase <phases>] [-timeout <minutes>]")
 		fmt.Println("\nFlags:")
 		fmt.Println("  -rate          Requests per second (default: 10)")
 		fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
@@ -401,6 +742,7 @@ func main() {
 		fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
 		fmt.Println("  -cookie        Cookie for authenticated scanning (e.g. 'session=abc123')")
 		fmt.Println("  -burp          Path to Burp request file for SQLMap")
+		fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 		fmt.Println("\nPhases:")
 		fmt.Println("  0 = Subdomain Enumeration (subfinder)")
 		fmt.Println("  1 = Quick SQLi Test")
@@ -443,6 +785,9 @@ func main() {
 	if len(skipList) > 0 {
 		fmt.Printf("[*] SKIPPING PATTERNS: %s\n", strings.Join(skipList, ", "))
 	}
+	if *crawlTimeout > 0 {
+		fmt.Printf("[*] TIMEOUT: %d minutes\n", *crawlTimeout)
+	}
 	fmt.Println(strings.Repeat("=", 60))
 
 	if *subdomains {
@@ -450,6 +795,7 @@ func main() {
 	}
 
 	crawler := newCrawler(*rateLimit, os.Stdout, f, parsed.Host)
+	defer crawler.stop()
 
 	if !*ignoreRobots {
 		crawler.fetchRobots(parsed)
@@ -457,13 +803,24 @@ func main() {
 		fmt.Println("[*] robots.txt ignored")
 	}
 
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if *crawlTimeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(*crawlTimeout)*time.Minute)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	defer cancel()
+
 	sem := make(chan struct{}, *concurrency)
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	sem <- struct{}{}
-	go crawler.pars(*targetURL, *recursive, 0, *maxDepth, skipList, &wg, sem)
+	go crawler.pars(ctx, *targetURL, *recursive, 0, *maxDepth, skipList, &wg, sem)
 	wg.Wait()
+
+	crawler.scanJS(os.Stdout, f)
 
 	f.Sync()
 
@@ -495,6 +852,8 @@ func main() {
 		if *burpFile != "" {
 			pentestArgs = append(pentestArgs, "-burp", *burpFile)
 		}
+
+		
 
 		cmd := exec.Command("./pentest", pentestArgs...)
 		cmd.Stdout = os.Stdout

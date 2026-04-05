@@ -13,7 +13,6 @@ output
 Poutput
 
 #binary pentest
-pentest
 
 # Test binary, built with `go test -c`
 *.test

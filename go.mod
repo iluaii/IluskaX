@@ -1,5 +1,5 @@
-module main
+module IluskaX
 
-go 1.26.1
+go 1.23.0
 
-require golang.org/x/net v0.52.0 
+require golang.org/x/net v0.38.0

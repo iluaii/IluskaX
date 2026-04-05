@@ -13,6 +13,8 @@ output
 Poutput
 
 #binary pentest
+/pentest
+/luska
 
 # Test binary, built with `go test -c`
 *.test

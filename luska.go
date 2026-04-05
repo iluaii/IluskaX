@@ -335,11 +335,15 @@ func (c *Crawler) pars(ctx context.Context, uri string, recurs bool, depr, depth
 				}
 			}
 			if len(params) > 0 {
-				connector := "?"
-				if strings.Contains(f.Action, "?") {
-					connector = "&"
+				if f.Method == "POST" {
+					c.writeLine("POST|" + f.Action + "|" + strings.Join(params, "&"))
+				} else {
+					connector := "?"
+					if strings.Contains(f.Action, "?") {
+						connector = "&"
+					}
+					c.writeLine(f.Action + connector + strings.Join(params, "&"))
 				}
-				c.writeLine(f.Action + connector + strings.Join(params, "&"))
 			}
 		}
 	}

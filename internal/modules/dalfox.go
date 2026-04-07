@@ -5,18 +5,51 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"unicode/utf8"
+
+	"IluskaX/internal/ui"
 )
 
-func DalfoxScan(urls []string, w io.Writer, cookie string) {
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if r == 'm' {
+				inEsc = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func DalfoxScan(urls []string, w io.Writer, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	fmt.Fprintln(w, "\n┌─ [PHASE 4] DALFOX - XSS Detection")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
+
+	if sb != nil {
+		sb.SetPhase("DALFOX", int64(len(urls)))
+	}
 
 	vulnCount := 0
 	for i, testURL := range urls {
 		if !HasParams(testURL) {
 			continue
 		}
-		fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(urls), testURL)
+
+		if sb != nil {
+			sb.Log("├─ [%d/%d] %s\n", i+1, len(urls), ui.Truncate(testURL, ui.MaxURLLen))
+		} else {
+			fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(urls), testURL)
+		}
 
 		args := []string{"url", testURL, "--follow-redirects"}
 		if cookie != "" {
@@ -29,12 +62,40 @@ func DalfoxScan(urls []string, w io.Writer, cookie string) {
 			strings.Contains(outStr, "INJECT") || strings.Contains(outStr, "Injected")
 
 		if isVuln {
-			fmt.Fprintf(w, "│  ✓ [VULNERABLE] XSS found\n")
+			msg := ui.Green("  ✓ [VULNERABLE] XSS found")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
 			vulnCount++
+			payload := ""
+			for _, line := range strings.Split(outStr, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.Contains(line, "poc =") || strings.Contains(line, "Payload") ||
+					strings.Contains(line, "[V]") || strings.Contains(line, "Triggered") {
+					payload = stripANSI(line)
+					break
+				}
+			}
+			if rc != nil {
+				rc.AddFinding(ui.Finding{
+					Type:    ui.VulnXSS,
+					Level:   ui.LevelVulnerability,
+					URL:     testURL,
+					Payload: payload,
+					Detail:  "XSS",
+				})
+			}
 		} else if err != nil {
 			fmt.Fprintf(w, "│  ? [ERROR] %v\n", err)
 		} else {
-			fmt.Fprintf(w, "│  ○ [SAFE] Not vulnerable\n")
+			msg := ui.Dim("  ○ [SAFE]")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
 		}
 
 		for _, line := range strings.Split(outStr, "\n") {
@@ -42,13 +103,27 @@ func DalfoxScan(urls []string, w io.Writer, cookie string) {
 			if line != "" && (strings.Contains(line, "[V]") || strings.Contains(line, "poc =") ||
 				strings.Contains(line, "INJECT") || strings.Contains(line, "Injected") ||
 				strings.Contains(line, "Parameter") || strings.Contains(line, "Payload")) {
-				fmt.Fprintf(w, "│     %s\n", line)
+				display := ui.Truncate(stripANSI(line), 100)
+				fmt.Fprintf(w, "│     %s\n", display)
 			}
+		}
+
+		if sb != nil {
+			sb.Tick(1)
 		}
 	}
 
 	if vulnCount > 0 {
-		fmt.Fprintf(w, "├─ [ALERT] Found %d vulnerable URLs\n", vulnCount)
+		msg := fmt.Sprintf("├─ %s\n", ui.Red(fmt.Sprintf("[ALERT] Found %d vulnerable URLs", vulnCount)))
+		if sb != nil {
+			sb.Log("%s", msg)
+		} else {
+			fmt.Fprint(w, msg)
+		}
 	}
-	fmt.Fprintln(w, "└─ Dalfox scan complete")
+	if sb != nil {
+		sb.Log("└─ Dalfox scan complete\n")
+	} else {
+		fmt.Fprintln(w, "└─ Dalfox scan complete")
+	}
 }

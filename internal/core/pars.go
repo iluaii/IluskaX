@@ -10,8 +10,19 @@ import (
 	"sync"
 
 	"golang.org/x/net/html"
+
+	"IluskaX/internal/ui"
 )
 
+func (c *Crawler) TryMarkVisited(uri string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.visited[uri] {
+		return false
+	}
+	c.visited[uri] = true
+	return true
+}
 func (c *Crawler) Pars(
 	ctx context.Context,
 	uri string,
@@ -20,6 +31,8 @@ func (c *Crawler) Pars(
 	skipList []string,
 	wg *sync.WaitGroup,
 	sem chan struct{},
+	rc *ui.ReportCollector,
+	sb *ui.StatusBar,
 ) {
 	if wg != nil {
 		defer wg.Done()
@@ -34,13 +47,16 @@ func (c *Crawler) Pars(
 	default:
 	}
 
-	if c.IsVisited(uri) {
+	if !c.TryMarkVisited(uri) {
 		return
 	}
-	c.MarkVisited(uri)
 	c.mu.Lock()
 	c.VisitedPages = append(c.VisitedPages, uri)
 	c.mu.Unlock()
+
+	if rc != nil {
+		rc.AddSitemapURL(uri)
+	}
 
 	if parsed0, err := url.Parse(uri); err == nil && parsed0.Path == "" {
 		parsed0.Path = "/"
@@ -79,11 +95,17 @@ func (c *Crawler) Pars(
 	var forms []Form
 	Traverse(doc, base, &links, &forms)
 
-	c.Log("\n[CRAWL] %s (Depth: %d)\n", base.Path, depr)
-	c.Log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
+	if sb != nil {
+		sb.Log("\n[CRAWL] %s (Depth: %d)\n", ui.Truncate(base.Path, 80), depr)
+		sb.Log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
+		sb.Tick(1)
+	} else {
+		c.Log("\n[CRAWL] %s (Depth: %d)\n", base.Path, depr)
+		c.Log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
+	}
 
 	c.writeForms(forms)
-	c.writeLinks(ctx, links, base, recurs, depr, depth, skipList, wg, sem)
+	c.writeLinks(ctx, links, base, recurs, depr, depth, skipList, wg, sem, rc, sb)
 }
 
 func (c *Crawler) writeForms(forms []Form) {
@@ -124,6 +146,8 @@ func (c *Crawler) writeLinks(
 	skipList []string,
 	wg *sync.WaitGroup,
 	sem chan struct{},
+	rc *ui.ReportCollector,
+	sb *ui.StatusBar,
 ) {
 	if len(links) == 0 {
 		return
@@ -142,11 +166,11 @@ func (c *Crawler) writeLinks(
 			continue
 		}
 		if IsSkipped(l, skipList) {
-			c.Log("│  ├─ [%d] %s [SKIPPED]\n", i+1, parsed.Path)
+			c.Log("│  ├─ [%d] %s [SKIPPED]\n", i+1, ui.Truncate(parsed.Path, 60))
 			continue
 		}
 		if !c.InScope(l) {
-			c.Log("│  ├─ [%d] %s [OUT OF SCOPE]\n", i+1, parsed.Host+parsed.Path)
+			c.Log("│  ├─ [%d] %s [OUT OF SCOPE]\n", i+1, ui.Truncate(parsed.Host+parsed.Path, 60))
 			continue
 		}
 
@@ -156,23 +180,44 @@ func (c *Crawler) writeLinks(
 		}
 		seenEndpoints[endpointKey] = true
 
-		c.Log("│  ├─ [%d] %s\n", i+1, parsed.Path)
+		c.Log("│  ├─ [%d] %s\n", i+1, ui.Truncate(parsed.Path, 70))
 		if parsed.Scheme != "" && parsed.Host != "" {
-			c.WriteLine(fmt.Sprintf("%s://%s%s", parsed.Scheme, parsed.Host, parsed.Path))
+			fullURL := fmt.Sprintf("%s://%s%s", parsed.Scheme, parsed.Host, parsed.Path)
+			c.WriteLine(fullURL)
+			if rc != nil {
+				rc.AddSitemapURL(fullURL)
+			}
 		}
 		if parsed.RawQuery != "" {
 			for key, vals := range parsed.Query() {
-				c.Log("│  │  └─ param: %s=%s\n", key, vals[0])
+				c.Log("│  │  └─ param: %s=%s\n", key, ui.Truncate(vals[0], 40))
 			}
 			if parsed.Scheme != "" && parsed.Host != "" {
-				c.WriteLine(fmt.Sprintf("%s://%s%s?%s", parsed.Scheme, parsed.Host, parsed.Path, parsed.RawQuery))
+				withQuery := fmt.Sprintf("%s://%s%s?%s", parsed.Scheme, parsed.Host, parsed.Path, parsed.RawQuery)
+				c.WriteLine(withQuery)
+				if rc != nil {
+					rc.AddSitemapURL(withQuery)
+				}
 			}
 		}
 
-		if recurs && depr < depth && !c.IsVisited(l) {
-			childWg.Add(1)
-			sem <- struct{}{}
-			go c.Pars(ctx, l, recurs, depr+1, depth, skipList, &childWg, sem)
+		if recurs && depr < depth {
+			normalized := l
+			if p2, err := url.Parse(l); err == nil {
+				p2.Fragment = ""
+				normalized = p2.String()
+			}
+			c.mu.Lock()
+			alreadyVisited := c.visited[normalized]
+			if !alreadyVisited {
+				c.visited[normalized] = true
+			}
+			c.mu.Unlock()
+			if !alreadyVisited {
+				childWg.Add(1)
+				sem <- struct{}{}
+				go c.Pars(ctx, normalized, recurs, depr+1, depth, skipList, &childWg, sem, rc, sb)
+			}
 		}
 	}
 	childWg.Wait()

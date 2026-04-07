@@ -8,6 +8,8 @@
 *.so
 *.dylib
 
+.gocache
+
 #directory output
 output
 Poutput

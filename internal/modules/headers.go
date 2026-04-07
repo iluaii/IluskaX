@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"IluskaX/internal/ui"
 )
 
 var securityHeaders = []string{
@@ -20,7 +21,7 @@ var securityHeaders = []string{
 	"Access-Control-Allow-Origin",
 }
 
-func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time) {
+func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	fmt.Fprintln(w, "\n┌─ [PHASE 5] HEADER & COOKIE ANALYSIS")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
 
@@ -28,8 +29,16 @@ func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time) {
 	uniqueURLs := uniqueHosts(urls)
 	totalIssues := 0
 
+	if sb != nil {
+		sb.SetPhase("HEADERS", int64(len(uniqueURLs)))
+	}
+
 	for i, targetURL := range uniqueURLs {
-		fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(uniqueURLs), targetURL)
+		if sb != nil {
+			sb.Log("├─ [%d/%d] %s\n", i+1, len(uniqueURLs), ui.Truncate(targetURL, ui.MaxURLLen))
+		} else {
+			fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(uniqueURLs), targetURL)
+		}
 
 		<-limiter
 		req, _ := http.NewRequest("GET", targetURL, nil)
@@ -37,24 +46,45 @@ func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time) {
 		resp, err := client.Do(req)
 		if err != nil {
 			fmt.Fprintf(w, "│  [ERROR] %v\n", err)
+			if sb != nil {
+				sb.Tick(1)
+			}
 			continue
 		}
 		resp.Body.Close()
 
-		totalIssues += checkMissingHeaders(resp, w)
-		totalIssues += checkCSP(resp, w)
-		totalIssues += checkCORS(resp, w)
-		totalIssues += checkHSTS(resp, w)
-		printServerInfo(resp, w, &totalIssues)
-		totalIssues += checkCookies(resp, w)
+		totalIssues += checkMissingHeaders(resp, w, targetURL, rc)
+		totalIssues += checkCSP(resp, w, targetURL, rc)
+		totalIssues += checkCORS(resp, w, targetURL, rc)
+		totalIssues += checkHSTS(resp, w, targetURL, rc)
+		printServerInfo(resp, w, &totalIssues, targetURL, rc)
+		totalIssues += checkCookies(resp, w, targetURL, rc)
+
+		if sb != nil {
+			sb.Tick(1)
+		}
 	}
 
 	if totalIssues > 0 {
-		fmt.Fprintf(w, "├─ [ALERT] Total issues found: %d\n", totalIssues)
+		msg := fmt.Sprintf("├─ %s\n", ui.Red(fmt.Sprintf("[ALERT] Total issues found: %d", totalIssues)))
+		if sb != nil {
+			sb.Log("%s", msg)
+		} else {
+			fmt.Fprint(w, msg)
+		}
 	} else {
-		fmt.Fprintln(w, "├─ No header/cookie issues detected")
+		msg := "├─ " + ui.Green("No header/cookie issues detected") + "\n"
+		if sb != nil {
+			sb.Log("%s", msg)
+		} else {
+			fmt.Fprint(w, msg)
+		}
 	}
-	fmt.Fprintln(w, "└─ Header & Cookie scan complete")
+	if sb != nil {
+		sb.Log("└─ Header & Cookie scan complete\n")
+	} else {
+		fmt.Fprintln(w, "└─ Header & Cookie scan complete")
+	}
 }
 
 func uniqueHosts(urls []string) []string {
@@ -74,25 +104,23 @@ func uniqueHosts(urls []string) []string {
 	return result
 }
 
-func checkMissingHeaders(resp *http.Response, w io.Writer) int {
+func checkMissingHeaders(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
+	issues := 0 // Создаем локальный счетчик
 	var missing []string
 	for _, h := range securityHeaders {
 		if resp.Header.Get(h) == "" {
 			missing = append(missing, h)
+			issues++
 		}
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(w, "│  [HEADERS] Missing %d security headers:\n", len(missing))
-		for _, h := range missing {
-			fmt.Fprintf(w, "│     ✗ %s\n", h)
-		}
-		return len(missing)
+		fmt.Fprintf(w, "│  [HEADERS] Missing %d security headers\n", len(missing))
+		return issues
 	}
-	fmt.Fprintf(w, "│  [HEADERS] ✓ All security headers present\n")
 	return 0
 }
 
-func checkCSP(resp *http.Response, w io.Writer) int {
+func checkCSP(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
 	issues := 0
 	csp := resp.Header.Get("Content-Security-Policy")
 	if csp == "" {
@@ -100,24 +128,33 @@ func checkCSP(resp *http.Response, w io.Writer) int {
 	}
 	if strings.Contains(csp, "'unsafe-inline'") {
 		fmt.Fprintf(w, "│  [WARN] CSP contains 'unsafe-inline'\n")
+		if rc != nil {
+			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelWarning, URL: targetURL, Payload: "CSP: unsafe-inline", Detail: "weak CSP"})
+		}
 		issues++
 	}
 	if strings.Contains(csp, "'unsafe-eval'") {
 		fmt.Fprintf(w, "│  [WARN] CSP contains 'unsafe-eval'\n")
+		if rc != nil {
+			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelWarning, URL: targetURL, Payload: "CSP: unsafe-eval", Detail: "weak CSP"})
+		}
 		issues++
 	}
 	return issues
 }
 
-func checkCORS(resp *http.Response, w io.Writer) int {
+func checkCORS(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
 	if resp.Header.Get("Access-Control-Allow-Origin") == "*" {
 		fmt.Fprintf(w, "│  [WARN] CORS wildcard (*) — any origin allowed\n")
+		if rc != nil {
+			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelWarning, URL: targetURL, Payload: "CORS: Access-Control-Allow-Origin: *", Detail: "wildcard CORS"})
+		}
 		return 1
 	}
 	return 0
 }
 
-func checkHSTS(resp *http.Response, w io.Writer) int {
+func checkHSTS(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
 	issues := 0
 	hsts := resp.Header.Get("Strict-Transport-Security")
 	if hsts == "" {
@@ -125,26 +162,35 @@ func checkHSTS(resp *http.Response, w io.Writer) int {
 	}
 	if !strings.Contains(hsts, "includeSubDomains") {
 		fmt.Fprintf(w, "│  [WARN] HSTS missing 'includeSubDomains'\n")
+		if rc != nil {
+			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelWarning, URL: targetURL, Payload: "HSTS: missing includeSubDomains", Detail: "weak HSTS"})
+		}
 		issues++
 	}
 	if !strings.Contains(hsts, "max-age") {
 		fmt.Fprintf(w, "│  [WARN] HSTS missing 'max-age'\n")
+		if rc != nil {
+			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelWarning, URL: targetURL, Payload: "HSTS: missing max-age", Detail: "weak HSTS"})
+		}
 		issues++
 	}
 	return issues
 }
 
-func printServerInfo(resp *http.Response, w io.Writer, issues *int) {
+func printServerInfo(resp *http.Response, w io.Writer, issues *int, targetURL string, rc *ui.ReportCollector) {
 	if server := resp.Header.Get("Server"); server != "" {
 		fmt.Fprintf(w, "│  [INFO] Server: %s\n", server)
 	}
 	if powered := resp.Header.Get("X-Powered-By"); powered != "" {
-		fmt.Fprintf(w, "│  [INFO] X-Powered-By: %s (information disclosure)\n", powered)
+		fmt.Fprintf(w, "│  [INFO] X-Powered-By: %s %s\n", powered, ui.Yellow("(information disclosure)"))
+		if rc != nil {
+			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelInfo, URL: targetURL, Payload: "X-Powered-By: " + powered, Detail: "info disclosure"})
+		}
 		*issues++
 	}
 }
 
-func checkCookies(resp *http.Response, w io.Writer) int {
+func checkCookies(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
 	issues := 0
 	if len(resp.Cookies()) == 0 {
 		fmt.Fprintf(w, "│  [COOKIE] No cookies set\n")
@@ -165,10 +211,20 @@ func checkCookies(resp *http.Response, w io.Writer) int {
 			probs = append(probs, "no expiry set")
 		}
 		if len(probs) > 0 {
-			fmt.Fprintf(w, "│  [COOKIE] %s → %s\n", c.Name, strings.Join(probs, ", "))
+			issue := strings.Join(probs, ", ")
+			fmt.Fprintf(w, "│  [COOKIE] %s → %s\n", c.Name, ui.Yellow(issue))
+			if rc != nil {
+				rc.AddFinding(ui.Finding{
+					Type:    ui.VulnCookie,
+					Level:   ui.LevelWarning,
+					URL:     targetURL,
+					Payload: c.Name + ": " + issue,
+					Detail:  "insecure cookie",
+				})
+			}
 			issues += len(probs)
 		} else {
-			fmt.Fprintf(w, "│  [COOKIE] %s ✓ Secure\n", c.Name)
+			fmt.Fprintf(w, "│  [COOKIE] %s %s\n", c.Name, ui.Green("✓ Secure"))
 		}
 	}
 	return issues

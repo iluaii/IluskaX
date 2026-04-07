@@ -7,9 +7,11 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"IluskaX/internal/ui"
 )
 
-func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phaseLabel string, flushSession bool) bool {
+func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phaseLabel string, flushSession bool, sb *ui.StatusBar, rc *ui.ReportCollector) bool {
 	fmt.Fprintf(w, "\n┌─ [%s] SQLMAP - SQL Injection Detection\n", phaseLabel)
 
 	baseArgs := []string{
@@ -39,24 +41,59 @@ func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phase
 		return string(out), err
 	}
 
-	printResult := func(outStr string, err error) bool {
+	printResult := func(outStr string, err error, targetURL string) bool {
 		isVuln := strings.Contains(outStr, "Parameter:")
 		if isVuln {
-			fmt.Fprintf(w, "│  ✓ [VULNERABLE] SQL Injection detected\n")
+			msg := ui.Red("  ✓ [VULNERABLE] SQL Injection detected")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
 		} else if err != nil {
 			fmt.Fprintf(w, "│  ? [ERROR] %v\n", err)
 		} else {
-			fmt.Fprintf(w, "│  ○ [SAFE] Not vulnerable\n")
+			msg := ui.Dim("  ○ [SAFE]")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
 		}
+
+		payload := ""
+		paramName := ""
 		for _, line := range strings.Split(outStr, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
+			if strings.Contains(line, "Parameter:") {
+				paramName = line
+			}
+			if strings.Contains(line, "Payload:") {
+				payload = strings.TrimPrefix(line, "Payload:")
+				payload = strings.TrimSpace(payload)
+			}
 			if strings.Contains(line, "Parameter:") || strings.Contains(line, "Type:") ||
 				strings.Contains(line, "Payload:") || strings.Contains(line, "[*]") || strings.Contains(line, "[+]") {
-				fmt.Fprintf(w, "│     %s\n", line)
+				display := ui.Truncate(line, 100)
+				fmt.Fprintf(w, "│     %s\n", display)
 			}
+		}
+
+		if isVuln && rc != nil && targetURL != "" {
+			detail := paramName
+			if detail == "" {
+				detail = "SQLi"
+			}
+			rc.AddFinding(ui.Finding{
+				Type:    ui.VulnSQLi,
+				Level:   ui.LevelVulnerability,
+				URL:     targetURL,
+				Payload: payload,
+				Detail:  detail,
+			})
 		}
 		return isVuln
 	}
@@ -64,7 +101,7 @@ func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phase
 	if burpFile != "" {
 		fmt.Fprintf(w, "├─ Mode: Burp request file (%s) level=%s, risk=%s\n", burpFile, level, risk)
 		out, err := run(append([]string{"-r", burpFile}, baseArgs...))
-		result := printResult(out, err)
+		result := printResult(out, err, burpFile)
 		fmt.Fprintln(w, "└─ SQLMap scan complete")
 		return result
 	}
@@ -78,18 +115,29 @@ func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phase
 		}
 	}
 
+	if sb != nil {
+		sb.SetPhase("SQLMAP", int64(len(dedupURLs)))
+	}
+
 	fmt.Fprintf(w, "├─ Scanning %d URLs with level=%s, risk=%s\n", len(dedupURLs), level, risk)
 	vulnCount := 0
 	for i, u := range dedupURLs {
-		fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(dedupURLs), u)
+		if sb != nil {
+			sb.Log("├─ [%d/%d] %s\n", i+1, len(dedupURLs), ui.Truncate(u, ui.MaxURLLen))
+		} else {
+			fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(dedupURLs), u)
+		}
 		out, err := run(append([]string{"-u", u}, baseArgs...))
-		if printResult(out, err) {
+		if printResult(out, err, u) {
 			vulnCount++
+		}
+		if sb != nil {
+			sb.Tick(1)
 		}
 	}
 
 	if vulnCount > 0 {
-		fmt.Fprintf(w, "├─ [ALERT] Found %d vulnerable URLs\n", vulnCount)
+		fmt.Fprintf(w, "├─ %s\n", ui.Red(fmt.Sprintf("[ALERT] Found %d vulnerable URLs", vulnCount)))
 		fmt.Fprintln(w, "└─ Status: ESCALATING TO NEXT LEVEL ⚠️")
 		return true
 	}
@@ -97,15 +145,23 @@ func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phase
 	return false
 }
 
-func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string) {
+func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	if len(forms) == 0 {
 		return
 	}
 	fmt.Fprintf(w, "\n┌─ [PHASE 3-POST] SQLMAP - POST Forms\n")
 	fmt.Fprintf(w, "├─ Testing %d POST forms\n", len(forms))
 
+	if sb != nil {
+		sb.SetPhase("SQLMAP POST", int64(len(forms)))
+	}
+
 	for _, form := range forms {
-		fmt.Fprintf(w, "├─ POST %s\n", form.URL)
+		if sb != nil {
+			sb.Log("├─ POST %s\n", ui.Truncate(form.URL, ui.MaxURLLen))
+		} else {
+			fmt.Fprintf(w, "├─ POST %s\n", form.URL)
+		}
 		args := []string{
 			"-u", form.URL,
 			"--data=" + form.Data,
@@ -124,26 +180,44 @@ func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string) 
 		}
 		out, err := exec.Command("sqlmap", args...).CombinedOutput()
 		outStr := string(out)
-		if strings.Contains(outStr, "Parameter:") {
-			fmt.Fprintf(w, "│  ✓ [VULNERABLE] SQL Injection in POST\n")
+		isVuln := strings.Contains(outStr, "Parameter:")
+		if isVuln {
+			msg := ui.Red("  ✓ [VULNERABLE] SQL Injection in POST")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
+			if rc != nil {
+				rc.AddFinding(ui.Finding{
+					Type:    ui.VulnSQLi,
+					Level:   ui.LevelVulnerability,
+					URL:     form.URL,
+					Payload: form.Data,
+					Detail:  "POST SQLi",
+				})
+			}
 		} else if err != nil {
 			fmt.Fprintf(w, "│  ? [ERROR] %v\n", err)
 		} else {
-			fmt.Fprintf(w, "│  ○ [SAFE] Not vulnerable\n")
+			fmt.Fprintln(w, ui.Dim("  ○ [SAFE]"))
 		}
 		for _, line := range strings.Split(outStr, "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" && (strings.Contains(line, "Parameter:") || strings.Contains(line, "Type:") ||
 				strings.Contains(line, "Payload:") || strings.Contains(line, "[*]") || strings.Contains(line, "[+]")) {
-				fmt.Fprintf(w, "│     %s\n", line)
+				fmt.Fprintf(w, "│     %s\n", ui.Truncate(line, 100))
 			}
+		}
+		if sb != nil {
+			sb.Tick(1)
 		}
 	}
 	fmt.Fprintln(w, "└─ POST SQLMap complete")
 }
 
-func EscalateSQLMap(urls []string, w io.Writer, currentLevel, currentRisk, cookie, burpFile string) {
+func EscalateSQLMap(urls []string, w io.Writer, currentLevel, currentRisk, cookie, burpFile string, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	nextLevel := fmt.Sprintf("%d", minInt(atoi(currentLevel)+1, 3))
 	nextRisk := fmt.Sprintf("%d", minInt(atoi(currentRisk)+1, 3))
-	SQLMapScan(urls, w, nextLevel, nextRisk, cookie, burpFile, "PHASE 3.1", true)
+	SQLMapScan(urls, w, nextLevel, nextRisk, cookie, burpFile, "PHASE 3.1", true, sb, rc)
 }

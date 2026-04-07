@@ -9,9 +9,11 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"IluskaX/internal/ui"
 )
 
-func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limiter <-chan time.Time) bool {
+func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) bool {
 	fmt.Fprintln(w, "\n┌─ [PHASE 1] QUICK SQLi TEST - Analyzing response differences")
 
 	f, err := os.Open(urlFile)
@@ -44,40 +46,105 @@ func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limit
 
 	sc := bufio.NewScanner(f)
 	testCount, vulnerableCount := 0, 0
+	var paramURLs []string
 
-	for sc.Scan() && testCount < 20 {
-		testURL := strings.TrimSpace(sc.Text())
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line != "" && HasParams(line) {
+			paramURLs = append(paramURLs, line)
+		}
+	}
+
+	if sb != nil {
+		limit := 20
+		if len(paramURLs) < limit {
+			limit = len(paramURLs)
+		}
+		sb.SetPhase("QUICK SQLi", int64(limit))
+	}
+
+	f2, err := os.Open(urlFile)
+	if err != nil {
+		return false
+	}
+	defer f2.Close()
+
+	sc2 := bufio.NewScanner(f2)
+	for sc2.Scan() && testCount < 20 {
+		testURL := strings.TrimSpace(sc2.Text())
 		if testURL == "" || !HasParams(testURL) {
 			continue
 		}
 		testCount++
-		fmt.Fprintf(w, "├─ Testing [%d/20] %s\n", testCount, testURL)
+
+		if sb != nil {
+			sb.Log("├─ Testing [%d/20] %s\n", testCount, ui.Truncate(testURL, ui.MaxURLLen))
+		} else {
+			fmt.Fprintf(w, "├─ Testing [%d/20] %s\n", testCount, testURL)
+		}
 
 		_, baselineLen, err := doGet(testURL)
 		if err != nil {
 			fmt.Fprintf(w, "│  [SKIP] Connection error: %v\n", err)
+			if sb != nil {
+				sb.Tick(1)
+			}
 			continue
 		}
 
-		if checkTimeBased(testURL, doGet, w) {
+		vulnerable := false
+		payload := ""
+
+		if p, found := checkTimeBasedWithPayload(testURL, doGet, w); found {
 			vulnerableCount++
-			fmt.Fprintf(w, "│  ✓ VULNERABLE\n")
-			continue
-		}
-		if checkBoolean(testURL, baselineLen, doGet, w) {
+			payload = p
+			vulnerable = true
+			msg := ui.Red("  ✓ VULNERABLE (time-based)")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
+		} else if p, found := checkBooleanWithPayload(testURL, baselineLen, doGet, w); found {
 			vulnerableCount++
-			fmt.Fprintf(w, "│  ✓ VULNERABLE\n")
+			payload = p
+			vulnerable = true
+			msg := ui.Red("  ✓ VULNERABLE (boolean)")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
 		} else {
-			fmt.Fprintf(w, "│  ○ Safe\n")
+			msg := ui.Dim("  ○ Safe")
+			if sb != nil {
+				sb.Log("%s\n", msg)
+			} else {
+				fmt.Fprintln(w, msg)
+			}
+		}
+
+		if vulnerable && rc != nil {
+			rc.AddFinding(ui.Finding{
+				Type:    ui.VulnSQLi,
+				Level:   ui.LevelVulnerability,
+				URL:     testURL,
+				Payload: payload,
+				Detail:  "Quick SQLi",
+			})
+		}
+
+		if sb != nil {
+			sb.Tick(1)
 		}
 	}
 
-	vulnerableCount += testPostForms(allURLFile, w, cookie, limiter)
-	vulnerableCount += testCookieInjection(allURLFile, w, cookie)
+	vulnerableCount += testPostForms(allURLFile, w, cookie, limiter, sb, rc)
+	vulnerableCount += testCookieInjection(allURLFile, w, cookie, sb, rc)
 
 	fmt.Fprintln(w, "├─ Quick test complete")
 	if vulnerableCount > 0 {
-		fmt.Fprintf(w, "├─ [ALERT] Found %d vulnerable URLs\n", vulnerableCount)
+		fmt.Fprintf(w, "├─ %s\n", ui.Red(fmt.Sprintf("[ALERT] Found %d vulnerable URLs", vulnerableCount)))
 		fmt.Fprintln(w, "└─ Status: ESCALATING SQLMAP SCAN ⚠️")
 		return true
 	}
@@ -86,7 +153,7 @@ func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limit
 	return false
 }
 
-func checkTimeBased(testURL string, doGet func(string) (*http.Response, int64, error), w io.Writer) bool {
+func checkTimeBasedWithPayload(testURL string, doGet func(string) (*http.Response, int64, error), w io.Writer) (string, bool) {
 	payloads := []string{
 		"1; WAITFOR DELAY '0:0:2'--",
 		"1 AND SLEEP(2)--",
@@ -99,18 +166,28 @@ func checkTimeBased(testURL string, doGet func(string) (*http.Response, int64, e
 			continue
 		}
 		if elapsed > 1800*time.Millisecond {
-			fmt.Fprintf(w, "│  [TIME-BASED] payload: %s, delay: %v\n", p, elapsed.Round(time.Millisecond))
-			return true
+			fmt.Fprintf(w, "│  [TIME-BASED] payload: %s, delay: %v\n", ui.Truncate(p, 60), elapsed.Round(time.Millisecond))
+			return p, true
 		}
 		if resp.StatusCode >= 500 {
-			fmt.Fprintf(w, "│  [POTENTIAL] HTTP %d on: %s\n", resp.StatusCode, p)
-			return true
+			fmt.Fprintf(w, "│  [POTENTIAL] HTTP %d on: %s\n", resp.StatusCode, ui.Truncate(p, 60))
+			return p, true
 		}
 	}
-	return false
+	return "", false
+}
+
+func checkTimeBasedOnly(testURL string, doGet func(string) (*http.Response, int64, error), w io.Writer) bool {
+	_, found := checkTimeBasedWithPayload(testURL, doGet, w)
+	return found
 }
 
 func checkBoolean(testURL string, baselineLen int64, doGet func(string) (*http.Response, int64, error), w io.Writer) bool {
+	_, found := checkBooleanWithPayload(testURL, baselineLen, doGet, w)
+	return found
+}
+
+func checkBooleanWithPayload(testURL string, baselineLen int64, doGet func(string) (*http.Response, int64, error), w io.Writer) (string, bool) {
 	pairs := [][2]string{
 		{"' OR '1'='1", "' OR '1'='2"},
 		{"' AND 1=1--", "' AND 1=2--"},
@@ -126,13 +203,13 @@ func checkBoolean(testURL string, baselineLen int64, doGet func(string) (*http.R
 		if diffTrueFalse > 20 && diffTrueBase < 15 {
 			fmt.Fprintf(w, "│  [BOOLEAN] true=%d false=%d baseline=%d diff=%.1f%%\n",
 				lenTrue, lenFalse, baselineLen, diffTrueFalse)
-			return true
+			return pair[0], true
 		}
 	}
-	return false
+	return "", false
 }
 
-func testPostForms(allURLFile string, w io.Writer, cookie string, limiter <-chan time.Time) int {
+func testPostForms(allURLFile string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) int {
 	forms := ReadPostForms(allURLFile)
 	if len(forms) == 0 {
 		return 0
@@ -147,7 +224,11 @@ func testPostForms(allURLFile string, w io.Writer, cookie string, limiter <-chan
 	}
 	count := 0
 	for _, form := range forms {
-		fmt.Fprintf(w, "├─ POST %s data=%s\n", form.URL, form.Data)
+		if sb != nil {
+			sb.Log("├─ POST %s data=%s\n", ui.Truncate(form.URL, ui.MaxURLLen), ui.Truncate(form.Data, 40))
+		} else {
+			fmt.Fprintf(w, "├─ POST %s data=%s\n", form.URL, form.Data)
+		}
 		found := false
 		for _, p := range payloads {
 			injected := InjectPostPayload(form.Data, p)
@@ -169,21 +250,35 @@ func testPostForms(allURLFile string, w io.Writer, cookie string, limiter <-chan
 			}
 			resp.Body.Close()
 			if elapsed > 9*time.Second {
-				fmt.Fprintf(w, "│  [TIME-BASED POST] payload=%q delay=%v\n", p, elapsed.Round(time.Millisecond))
-				fmt.Fprintf(w, "│  ✓ VULNERABLE\n")
+				fmt.Fprintf(w, "│  [TIME-BASED POST] payload=%q delay=%v\n", ui.Truncate(p, 60), elapsed.Round(time.Millisecond))
+				msg := ui.Red("  ✓ VULNERABLE")
+				if sb != nil {
+					sb.Log("%s\n", msg)
+				} else {
+					fmt.Fprintln(w, msg)
+				}
 				count++
 				found = true
+				if rc != nil {
+					rc.AddFinding(ui.Finding{
+						Type:    ui.VulnSQLi,
+						Level:   ui.LevelVulnerability,
+						URL:     form.URL,
+						Payload: p,
+						Detail:  "POST time-based",
+					})
+				}
 				break
 			}
 		}
 		if !found {
-			fmt.Fprintf(w, "│  ○ Safe\n")
+			fmt.Fprintln(w, ui.Dim("  ○ Safe"))
 		}
 	}
 	return count
 }
 
-func testCookieInjection(allURLFile string, w io.Writer, cookie string) int {
+func testCookieInjection(allURLFile string, w io.Writer, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) int {
 	autoClient := &http.Client{
 		Timeout: 25 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -267,7 +362,11 @@ func testCookieInjection(allURLFile string, w io.Writer, cookie string) int {
 
 	count := 0
 	for _, cookieName := range autoCookies {
-		fmt.Fprintf(w, "├─ Cookie injection: %s\n", cookieName)
+		if sb != nil {
+			sb.Log("├─ Cookie injection: %s\n", cookieName)
+		} else {
+			fmt.Fprintf(w, "├─ Cookie injection: %s\n", cookieName)
+		}
 		found := false
 	outerCookie:
 		for _, testURL := range scanURLs {
@@ -299,16 +398,30 @@ func testCookieInjection(allURLFile string, w io.Writer, cookie string) int {
 				resp.Body.Close()
 				if elapsed > 9*time.Second {
 					fmt.Fprintf(w, "│  [TIME-BASED COOKIE] %s payload=%q url=%s delay=%v\n",
-						cookieName, p, testURL, elapsed.Round(time.Millisecond))
-					fmt.Fprintf(w, "│  ✓ VULNERABLE\n")
+						cookieName, ui.Truncate(p, 50), ui.Truncate(testURL, ui.MaxURLLen), elapsed.Round(time.Millisecond))
+					msg := ui.Red("  ✓ VULNERABLE")
+					if sb != nil {
+						sb.Log("%s\n", msg)
+					} else {
+						fmt.Fprintln(w, msg)
+					}
 					count++
 					found = true
+					if rc != nil {
+						rc.AddFinding(ui.Finding{
+							Type:    ui.VulnSQLi,
+							Level:   ui.LevelVulnerability,
+							URL:     testURL,
+							Payload: cookieName + "=" + p,
+							Detail:  "Cookie injection",
+						})
+					}
 					break outerCookie
 				}
 			}
 		}
 		if !found {
-			fmt.Fprintf(w, "│  ○ Safe\n")
+			fmt.Fprintln(w, ui.Dim("  ○ Safe"))
 		}
 	}
 	return count

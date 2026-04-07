@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"golang.org/x/net/html"
+	"IluskaX/internal/ui"
 )
 
 type JSEndpoint struct {
@@ -15,7 +16,6 @@ type JSEndpoint struct {
 	Params []string
 	Source string
 }
-
 var (
 	reStrPath     = regexp.MustCompile(`["'](/[a-zA-Z0-9_\-/]{2,}(?:\?[a-zA-Z0-9_\-=&]*)?)["']`)
 	reFetchQuoted = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*[\"']([^\"'`]+)[\"']")
@@ -28,13 +28,19 @@ var (
 	jsSkipExts = []string{".png", ".jpg", ".gif", ".svg", ".css", ".woff", ".ico", "data:"}
 )
 
-func (c *Crawler) ScanJS(term io.Writer, file io.Writer) {
-	fmt.Fprintln(term, "\n"+strings.Repeat("═", 60))
-	fmt.Fprintln(term, "  JS PARSER STARTED")
-	fmt.Fprintln(term, strings.Repeat("═", 60))
+func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector, sb *ui.StatusBar) {
+	logf := func(format string, args ...interface{}) {
+		if sb != nil {
+			sb.Log(format, args...)
+		} else {
+			fmt.Fprintf(term, format, args...)
+		}
+	}
+
+	logf("\n%s\n  JS PARSER STARTED\n%s\n", strings.Repeat("═", 60), strings.Repeat("═", 60))
 
 	if len(c.VisitedPages) == 0 {
-		fmt.Fprintln(term, "└─ No pages to scan")
+		logf("└─ No pages to scan\n")
 		return
 	}
 
@@ -112,9 +118,9 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer) {
 		walkScripts(doc)
 	}
 
-	fmt.Fprintf(term, "├─ JS files/blocks found: %d\n", len(jsSources))
+	logf("├─ JS files/blocks found: %d\n", len(jsSources))
 	if len(jsSources) == 0 {
-		fmt.Fprintln(term, "└─ No JS to analyze")
+		logf("%s\n", "└─ No JS to analyze")
 		return
 	}
 
@@ -127,33 +133,41 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer) {
 	}
 
 	if len(allEndpoints) == 0 {
-		fmt.Fprintln(term, "└─ No endpoints found in JS")
+		logf("%s\n", "└─ No endpoints found in JS")
 		return
 	}
 
-	fmt.Fprintf(term, "├─ Endpoints found: %d\n", len(allEndpoints))
-	fmt.Fprintln(term, "│")
-	fmt.Fprintf(term, "│  %-70s %-14s %s\n", "ENDPOINT", "SOURCE", "PARAMS")
-	fmt.Fprintf(term, "│  %s\n", strings.Repeat("─", 100))
+	logf("├─ Endpoints found: %d\n", len(allEndpoints))
+	logf("%s\n", "│")
+	logf("│  %-70s %-14s %s\n", "ENDPOINT", "SOURCE", "PARAMS")
+	logf("│  %s\n", strings.Repeat("─", 100))
 
 	for _, ep := range allEndpoints {
 		params := "-"
 		if len(ep.Params) > 0 {
 			params = strings.Join(ep.Params, ", ")
 		}
-		fmt.Fprintf(term, "│  %-70s %-14s %s\n", ep.URL, ep.Source, params)
+		displayURL := ui.Truncate(ep.URL, 70)
+		logf("│  %-70s %-14s %s\n", displayURL, ep.Source, ui.Truncate(params, 40))
 		fmt.Fprintln(file, ep.URL)
+		if rc != nil {
+			rc.AddSitemapURL(ep.URL)
+		}
 		if len(ep.Params) > 0 && !strings.Contains(ep.URL, "?") {
 			parts := make([]string, len(ep.Params))
 			for i, p := range ep.Params {
 				parts[i] = p + "=1"
 			}
-			fmt.Fprintln(file, ep.URL+"?"+strings.Join(parts, "&"))
+			withParams := ep.URL + "?" + strings.Join(parts, "&")
+			fmt.Fprintln(file, withParams)
+			if rc != nil {
+				rc.AddSitemapURL(withParams)
+			}
 		}
 	}
 
-	fmt.Fprintln(term, "│")
-	fmt.Fprintln(term, "└─ JS parse complete")
+	logf("%s\n", "│")
+	logf("%s\n", "└─ JS parse complete")
 }
 
 func parseJSBody(body, sourceURL string, base *url.URL) []JSEndpoint {
@@ -202,7 +216,7 @@ func parseJSBody(body, sourceURL string, base *url.URL) []JSEndpoint {
 			continue
 		}
 		resolved := base.ResolveReference(ref).String()
-		if skip := func() bool {
+		if func() bool {
 			lower := strings.ToLower(resolved)
 			for _, ext := range jsSkipExts {
 				if strings.Contains(lower, ext) {
@@ -210,7 +224,7 @@ func parseJSBody(body, sourceURL string, base *url.URL) []JSEndpoint {
 				}
 			}
 			return false
-		}(); skip {
+		}() {
 			continue
 		}
 		params := extractParams(clean)

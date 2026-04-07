@@ -13,24 +13,26 @@ import (
 
 	"IluskaX/internal/core"
 	"IluskaX/internal/modules"
+	"IluskaX/internal/ui"
 )
 
 func main() {
-	targetURL  := flag.String("u", "", "Target URL to crawl")
-	recursive  := flag.Bool("r", false, "Enable recursive crawling")
-	maxDepth   := flag.Int("rd", 0, "Maximum recursion depth")
-	pentest    := flag.Bool("ps", false, "Run pentest scan after crawl")
-	subdomains := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
-	rateLimit  := flag.Int("rate", 10, "Requests per second")
-	concurrency := flag.Int("c", 5, "Max concurrent goroutines")
+	targetURL    := flag.String("u", "", "Target URL to crawl")
+	recursive    := flag.Bool("r", false, "Enable recursive crawling")
+	maxDepth     := flag.Int("rd", 0, "Maximum recursion depth")
+	pentest      := flag.Bool("ps", false, "Run pentest scan after crawl")
+	subdomains   := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
+	rateLimit    := flag.Int("rate", 10, "Requests per second")
+	concurrency  := flag.Int("c", 5, "Max concurrent goroutines")
 	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
-	sqlmapLevel := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
-	sqlmapRisk  := flag.Int("sqlmap-risk", 0, "SQLMap starting risk (1-3), 0 = auto")
-	cookie      := flag.String("cookie", "", "Cookie header for authenticated scanning")
-	burpFile    := flag.String("burp", "", "Path to Burp request file for SQLMap")
-	skipFlag    := flag.String("skip", "", "Comma-separated path patterns to skip")
-	skipPhases  := flag.String("skip-phase", "", "Comma-separated phases to skip (0-5)")
+	sqlmapLevel  := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
+	sqlmapRisk   := flag.Int("sqlmap-risk", 0, "SQLMap starting risk (1-3), 0 = auto")
+	cookie       := flag.String("cookie", "", "Cookie header for authenticated scanning")
+	burpFile     := flag.String("burp", "", "Path to Burp request file for SQLMap")
+	skipFlag     := flag.String("skip", "", "Comma-separated path patterns to skip")
+	skipPhases   := flag.String("skip-phase", "", "Comma-separated phases to skip (0-5)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
+	outFile      := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
 	flag.Parse()
 
 	if *targetURL == "" {
@@ -64,6 +66,10 @@ func main() {
 	}
 	defer f.Close()
 
+	rc := ui.NewReportCollector()
+	sb := ui.NewStatusBar()
+	startTime := time.Now()
+
 	sep := strings.Repeat("=", 60)
 	fmt.Println("\n" + sep)
 	fmt.Printf("[*] CRAWLING STARTED: %s\n", *targetURL)
@@ -79,6 +85,9 @@ func main() {
 	if *subdomains {
 		modules.SubdomainEnum(parsed.Hostname(), f, os.Stdout)
 	}
+
+	sb.SetPhase("CRAWL", 0)
+	sb.Start()
 
 	crawler := core.NewCrawler(*rateLimit, os.Stdout, f, parsed.Host)
 	defer crawler.Stop()
@@ -102,15 +111,26 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	sem <- struct{}{}
-	go crawler.Pars(ctx, *targetURL, *recursive, 0, *maxDepth, skipList, &wg, sem)
+	go crawler.Pars(ctx, *targetURL, *recursive, 0, *maxDepth, skipList, &wg, sem, rc, sb)
 	wg.Wait()
 
-	crawler.ScanJS(os.Stdout, f)
+	crawler.ScanJS(os.Stdout, f, rc, sb)
 	f.Sync()
+
+	sb.Stop()
 
 	fmt.Println("\n" + sep)
 	fmt.Printf("[+] CRAWL COMPLETE: %s\n", crawlPath)
+	fmt.Printf("[+] URLs discovered: %d\n", len(rc.Sitemap()))
 	fmt.Println(sep)
+
+	if *outFile != "" && !*pentest {
+		if err := ui.WriteReport(*outFile, rc.Sitemap(), rc.Findings(), startTime); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Failed to write report: %v\n", err)
+		} else {
+			fmt.Printf("[+] Report written: %s\n", *outFile)
+		}
+	}
 
 	if *pentest {
 		fmt.Println("\n[*] Starting pentest scan...")
@@ -135,6 +155,9 @@ func main() {
 		if *burpFile != "" {
 			pentestArgs = append(pentestArgs, "-burp", *burpFile)
 		}
+		if *outFile != "" {
+			pentestArgs = append(pentestArgs, "-o", *outFile)
+		}
 
 		cmd := exec.Command("./pentest", pentestArgs...)
 		cmd.Stdout = os.Stdout
@@ -147,7 +170,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-o <report>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -rate          Requests per second (default: 10)")
@@ -158,6 +181,7 @@ func printUsage() {
 	fmt.Println("  -cookie        Cookie for authenticated scanning")
 	fmt.Println("  -burp          Path to Burp request file for SQLMap")
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
+	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")
 	fmt.Println()
 	fmt.Println("Phases (for -skip-phase):")
 	fmt.Println("  0 = Subdomain Enumeration (subfinder)")

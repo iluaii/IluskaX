@@ -1,31 +1,34 @@
-# IluskaX (luska)
+# IluskaX
 
-A web security scanner written in Go. Crawls a target, finds URLs and forms, then runs a series of vulnerability checks — either as a full pipeline or selectively by phase.
+Go-based web security scanner with two binaries:
 
-It's two binaries: `luska` (crawler) and `pentest` (scanner). They can run together or separately.
+- `luska` for crawl, JS parsing, sitemap generation, and optional handoff to pentest
+- `pentest` for vulnerability checks against a crawl file
+
+It can run as a simple CLI scanner or with a Bubble Tea TUI for the pentest phase.
+
+## Build
 
 ```bash
-git clone https://github.com/iluaii/IluskaX && cd IluskaX
+git clone https://github.com/iluaii/IluskaX
+cd IluskaX
 go mod tidy
-go build -o luska ./cmd/luska && go build -o pentest ./cmd/pentest
+go build -o luska ./main.go
+go build -o pentest ./cmd/pentest/main1.go
 ```
-
----
 
 ## Requirements
 
-The scanner itself is pure Go, but the pentest phases depend on external tools being in your `$PATH`:
+Core crawl logic is pure Go, but some pentest phases rely on external tools in `$PATH`:
 
-- `subfinder` — subdomain enumeration (Phase 0)
-- `sqlmap` — deep SQL injection scanning (Phase 3)
-- `nuclei` — template-based vulnerability detection (Phase 2)
-- `dalfox` — XSS detection (Phase 4)
+- `subfinder` for subdomain enumeration
+- `nuclei` for template-based checks
+- `sqlmap` for SQL injection testing
+- `dalfox` for XSS testing
 
-If a tool isn't installed, that phase will error out.
+If a tool is missing, only that phase will fail or be skipped.
 
----
-
-## Usage
+## Quick Start
 
 ### Crawl only
 
@@ -33,187 +36,197 @@ If a tool isn't installed, that phase will error out.
 ./luska -u https://example.com
 ```
 
-### Crawl + pentest
+### Crawl and then run pentest
 
 ```bash
 ./luska -u https://example.com -ps
 ```
 
-### With options
+### Crawl and pentest with exported report
 
 ```bash
-./luska -u https://example.com -ps -r -rd 3 -sd -rate 5 -c 10 -cookie "session=abc123"
+./luska -u https://example.com -ps -o report.txt
 ```
 
-### Run pentest on an existing crawl file
+### Pentest an existing crawl file
 
 ```bash
-./pentest -f output/example.com|2025-01-01_12-00-00.txt -host example.com
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com
 ```
 
----
+### Run pentest in TUI mode
 
-## Flags
+```bash
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -ui tui
+```
+
+### Run full flow and use TUI for pentest
+
+```bash
+./luska -u https://example.com -ps -ui tui
+```
+
+Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI mode and only the child `pentest` process uses the TUI.
+
+## `luska` Flags
 
 | Flag | Default | Description |
-|------|---------|-------------|
-| `-u` | — | Target URL (required) |
-| `-r` | false | Recursive crawling |
-| `-rd` | 0 | Max recursion depth |
-| `-ps` | false | Run pentest after crawl |
-| `-sd` | false | Subdomain enumeration before crawl (requires subfinder) |
-| `-rate` | 10 | Requests per second |
-| `-c` | 5 | Concurrent goroutines |
-| `-ignore-robots` | false | Skip robots.txt restrictions |
-| `-timeout` | 0 | Crawl timeout in minutes (0 = no limit) |
-| `-cookie` | — | Cookie header for authenticated scanning |
-| `-burp` | — | Path to Burp Suite request file (used by SQLMap) |
-| `-sqlmap-level` | auto | SQLMap level 1–5 |
-| `-sqlmap-risk` | auto | SQLMap risk 1–3 |
-| `-skip` | — | Comma-separated URL patterns to skip during crawl |
-| `-skip-phase` | — | Comma-separated phases to skip (see below) |
+|---|---|---|
+| `-u` | required | Target URL |
+| `-r` | `false` | Enable recursive crawl |
+| `-rd` | `0` | Maximum recursion depth |
+| `-ps` | `false` | Run pentest after crawl |
+| `-sd` | `false` | Run subdomain enumeration before crawl |
+| `-rate` | `10` | Requests per second |
+| `-c` | `5` | Max concurrent goroutines |
+| `-ignore-robots` | `false` | Ignore `robots.txt` restrictions |
+| `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
+| `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
+| `-cookie` | empty | Cookie header for authenticated scanning |
+| `-burp` | empty | Path to Burp request file for SQLMap |
+| `-skip` | empty | Comma-separated path patterns to skip during crawl |
+| `-skip-phase` | empty | Comma-separated phases to skip |
+| `-timeout` | `0` | Total crawl timeout in minutes, `0 = no limit` |
+| `-o` | empty | Output report path |
+| `-ui` | `cli` | UI mode: `cli` or `tui` |
 
----
+## `pentest` Flags
 
-## What the crawler does
+| Flag | Default | Description |
+|---|---|---|
+| `-f` | required | Crawl output file |
+| `-host` | `target` | Host label for output/report naming |
+| `-date` | current time | Date tag for output naming |
+| `-skip-phase` | empty | Comma-separated phases to skip |
+| `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
+| `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
+| `-cookie` | empty | Cookie header for authenticated scanning |
+| `-burp` | empty | Path to Burp request file for SQLMap |
+| `-rate` | `10` | Requests per second for HTTP probes |
+| `-o` | empty | Export final report to a custom path |
+| `-ui` | `cli` | UI mode: `cli` or `tui` |
 
-Fetches pages, parses HTML, and collects:
+## UI Modes
 
-- All links (`<a href>`)
-- Forms — both GET and POST, including field names
-- JS files (external and inline)
+- `cli` prints plain terminal output and final tables
+- `tui` uses Bubble Tea during pentest execution
 
-From JavaScript, it extracts endpoints found in `fetch()`, `axios`, XHR calls, template literals, and API variable assignments. It resolves relative paths against the page base URL.
+In TUI mode:
 
-Respects `robots.txt` by default — disallowed paths are skipped. Use `-ignore-robots` to bypass.
+- live logs scroll in the viewport
+- older lines disappear from the visible area when the screen fills up
+- final findings tables and summary are still printed after the scan finishes
 
-Scope is enforced by hostname. Out-of-scope URLs are logged but not followed.
+## Crawl Output
 
-Static assets (images, fonts, CSS, etc.) are filtered out automatically.
+The crawler collects:
 
-Output is written to `output/<hostname>|<datetime>.txt`.
+- in-scope links
+- GET and POST forms
+- JS files and inline JS blocks
+- endpoints extracted from JavaScript patterns like `fetch`, XHR, axios, template strings, and API assignments
 
----
+It also:
 
-## Pentest phases
+- respects `robots.txt` by default
+- keeps scope limited to the target hostname
+- filters common static assets
+- deduplicates endpoints by path and query parameter names
 
-### Phase 0 — Subdomain enumeration
-Runs `subfinder` against the target hostname. Found subdomains are added to the crawl file as `https://<subdomain>/`. Enabled with `-sd`.
+Crawl results are written to:
 
-### Phase 1 — Quick SQLi test
-Tests up to 20 URLs with parameters. Checks:
-- **Time-based**: injects `SLEEP`/`WAITFOR DELAY` payloads, looks for ~2s delay
-- **Boolean-based**: compares response sizes for true/false conditions (>20% difference triggers a flag)
-- **POST forms**: time-based injection in POST body
-- **Cookie injection**: discovers cookies from responses and tests them with sleep payloads
+```text
+output/<hostname>|<datetime>.txt
+```
 
-If anything is found, SQLMap (Phase 3) is automatically escalated to a higher level/risk.
+## Pentest Phases
 
-### Phase 2 — Nuclei
-Runs `nuclei` against all crawled URLs with severity `low,medium,high,critical`. Output is counted by severity and printed.
+### Phase 0: Subdomains
 
-### Phase 3 — SQLMap
-Runs `sqlmap` against all URLs with parameters. Uses `--technique=BEUSTQ` (all techniques). If Phase 1 found something, level and risk start higher. If this phase finds something, it escalates to the next level automatically (up to level 3 / risk 3).
+Uses `subfinder` and appends discovered subdomains to the crawl dataset.
 
-Also tests POST forms separately.
+### Phase 1: Quick SQLi Test
 
-Supports Burp Suite request files via `-burp` — passed directly to sqlmap with `-r`.
+Tests parameterized URLs and forms with fast checks:
 
-Cookie names discovered during crawl are passed to sqlmap as `--cookie-param`.
+- time-based payloads
+- boolean-based response comparison
+- POST form checks
+- cookie-based probes when cookies are present
 
-### Phase 4 — Dalfox
-Runs `dalfox url` against each URL that has parameters. Detects reflected/stored XSS. Supports authenticated scanning via cookie.
+If something suspicious is found, later SQLMap settings are escalated automatically.
 
-### Phase 5 — Header & Cookie analysis
-Checks each unique host (not every URL) for:
+### Phase 2: Nuclei
 
-**Missing security headers:**
-- `Content-Security-Policy`
-- `Strict-Transport-Security`
-- `X-Frame-Options`
-- `X-Content-Type-Options`
-- `Referrer-Policy`
-- `Permissions-Policy`
-- `X-XSS-Protection`
-- `Access-Control-Allow-Origin`
+Runs `nuclei` against discovered URLs.
 
-**CSP issues:** flags `unsafe-inline` and `unsafe-eval`
+### Phase 3: SQLMap
 
-**CORS:** flags wildcard `Access-Control-Allow-Origin: *`
+Runs `sqlmap` against parameterized URLs and POST forms.
 
-**HSTS:** flags missing `includeSubDomains` or `max-age`
+Supports:
 
-**Information disclosure:** flags presence of `X-Powered-By`
+- automatic escalation after suspicious Phase 1 results
+- Burp request files via `-burp`
+- cookie header forwarding via `-cookie`
 
-**Cookies:** checks each cookie for missing `HttpOnly`, `Secure`, `SameSite`, and expiry
+### Phase 4: Dalfox
 
----
+Runs `dalfox` against URLs with parameters to detect XSS.
 
-## Output
+### Phase 5: Header and Cookie Analysis
 
-Crawl results go to `output/<hostname>|<datetime>.txt`.
+Checks security-related response headers and cookie settings.
 
-Pentest report goes to `Poutput/<hostname>|<datetime>_report.txt`. The same output is printed to stdout while the scan runs.
+Important:
 
-SQLMap session files go to `Poutput/sqlmap/`.
+- missing headers are treated as recommendations or informational findings
+- real header or cookie misconfigurations are shown separately from confirmed vulnerabilities
 
----
+## Reports
 
-## Skipping phases
+Default files:
+
+```text
+output/<hostname>|<datetime>.txt
+Poutput/<hostname>|<datetime>_report.txt
+Poutput/sqlmap/
+```
+
+If `-o` is provided, IluskaX also writes a custom export file with:
+
+- sitemap
+- findings tables
+- final summary
+
+## Skip Phases
+
+Example:
 
 ```bash
 ./luska -u https://example.com -ps -skip-phase 2,4
 ```
 
-Phase numbers: `0` = subdomains, `1` = quick SQLi, `2` = nuclei, `3` = sqlmap, `4` = dalfox, `5` = headers
+Phase mapping:
 
----
+- `0` = subdomain enumeration
+- `1` = quick SQLi
+- `2` = nuclei
+- `3` = SQLMap
+- `4` = dalfox
+- `5` = header and cookie analysis
 
-## Build
-
-Requires Go 1.21+. Check your version:
-
-```bash
-go version
-```
-
-Clone the repo and build both binaries:
-
-```bash
-git clone https://github.com/yourname/IluskaX
-cd IluskaX
-go build -o luska ./cmd/luska
-go build -o pentest ./cmd/pentest
-```
-
-If your project structure has `main.go` at the root level for each binary, adjust accordingly:
-
-```bash
-go build -o luska .
-```
-
-Dependencies are managed via Go modules. Pull them before building:
-
-```bash
-go mod tidy
-```
-
-After that, `luska` and `pentest` are ready to use in the current directory.
-
----
-
-## Legal
-
-This tool is intended for use on systems you own or have explicit written permission to test. Running it against targets without authorization is illegal in most countries, regardless of intent.
-
-The authors take no responsibility for how this tool is used. Use it only in scope — on bug bounty programs, your own infrastructure, or test environments you control.
-
----
+For direct `pentest`, supported skip values are `1` through `5`.
 
 ## Notes
 
-- The scanner identifies itself as `LuskaScanner/1.0` in the User-Agent
-- HTTP client timeout is 10s per request during crawl, 8s during quick SQLi test
-- Max 10MB per page during crawl, 5MB per JS file
-- Max 5 redirects followed
-- Deduplication during crawl is by path + query parameter names (not values), so `?id=1` and `?id=2` are treated as the same endpoint
+- User-Agent: `LuskaScanner/1.0`
+- crawl request timeout is short and optimized for scanning, not browsing
+- JS parsing and endpoint extraction intentionally prefer breadth over perfect semantic accuracy
+- TUI is intended for the pentest phase, not as a full-screen wrapper around the entire crawl pipeline
+
+## Legal
+
+Use this tool only on systems you own or on targets where you have explicit permission to test.
+
+Unauthorized scanning may be illegal. You are responsible for how you use it.

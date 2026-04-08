@@ -113,9 +113,12 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 
 In TUI mode:
 
+- there is a global navigation layer with `Dashboard`, `Findings`, `Targets`, `History`, and `New Scan`
+- selecting a scan opens a detail view with `Logs`, `Findings`, `Targets`, and `Control`
 - live logs scroll in the viewport
 - older lines disappear from the visible area when the screen fills up
-- final findings tables and summary are still printed after the scan finishes
+- after the scan finishes, the TUI stays open and shows a completion message
+- press `Esc` to leave the finished TUI and print the final findings tables and summary
 
 ## Crawl Output
 
@@ -198,6 +201,65 @@ If `-o` is provided, IluskaX also writes a custom export file with:
 - sitemap
 - findings tables
 - final summary
+
+## TUI Overview
+
+### Dashboard
+
+Shows the active scans list and current state for each scan:
+
+- target
+- status
+- current phase
+- progress percent
+- finding counters
+
+Press `Enter` on the selected scan to open its detail view.
+
+### Findings
+
+Shows discovered issues collected during the running scan, separated from raw logs.
+
+### Targets
+
+Shows discovered scan targets grouped by host, so the output is easier to read than a flat URL list.
+
+Example:
+
+```text
+http://localhost:3000
+├─ /
+├─ /?q=1
+└─ /xss?q=test
+```
+
+### History
+
+Shows scans that were launched or finished during the current TUI session, plus queued items.
+
+### New Scan
+
+Lets you prepare a new command from inside the TUI.
+
+You can:
+
+- enter a target URL
+- add extra flags
+- choose `Run now` to launch a background `luska` process
+- choose `Queue` to store a scan in the local session queue
+
+`Run now` launches a new background process and writes its output to a log file in `Poutput/`.
+
+## TUI Controls
+
+- `Tab` and `Shift+Tab` switch tabs
+- `Left` and `Right` also switch tabs
+- `Up` and `Down` move selection or scroll
+- `Enter` opens scan details or confirms the current action in `New Scan`
+- `Esc` returns from scan details to the global tabs
+- after a scan finishes, `Esc` exits the TUI and returns to normal terminal output
+- `r` in `New Scan` runs immediately
+- `q` in `New Scan` adds the prepared scan to the queue
 
 ## Skip Phases
 

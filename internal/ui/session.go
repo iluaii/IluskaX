@@ -72,6 +72,15 @@ func (s *Session) Stop() {
 	s.status.Stop()
 }
 
+func (s *Session) Wait() {
+	if s == nil {
+		return
+	}
+	if s.mode == ModeTUI && s.tuiApp != nil {
+		s.tuiApp.Wait()
+	}
+}
+
 func (s *Session) Mode() Mode {
 	return s.mode
 }

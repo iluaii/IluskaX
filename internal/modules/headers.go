@@ -1,13 +1,13 @@
 package modules
 
 import (
+	"IluskaX/internal/ui"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-	"IluskaX/internal/ui"
 )
 
 var securityHeaders = []string{
@@ -22,12 +22,13 @@ var securityHeaders = []string{
 }
 
 func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "\n┌─ [PHASE 5] HEADER & COOKIE ANALYSIS")
+	fmt.Fprintln(w, "┌─ [PHASE 5] HEADER & COOKIE ANALYSIS")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	uniqueURLs := uniqueHosts(urls)
-	totalIssues := 0
+	totalAlerts := 0
+	totalRecommendations := 0
 
 	if sb != nil {
 		sb.SetPhase("HEADERS", int64(len(uniqueURLs)))
@@ -53,27 +54,35 @@ func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time, sb *
 		}
 		resp.Body.Close()
 
-		totalIssues += checkMissingHeaders(resp, w, targetURL, rc)
-		totalIssues += checkCSP(resp, w, targetURL, rc)
-		totalIssues += checkCORS(resp, w, targetURL, rc)
-		totalIssues += checkHSTS(resp, w, targetURL, rc)
-		printServerInfo(resp, w, &totalIssues, targetURL, rc)
-		totalIssues += checkCookies(resp, w, targetURL, rc)
+		totalRecommendations += checkMissingHeaders(resp, w, targetURL, rc)
+		totalAlerts += checkCSP(resp, w, targetURL, rc)
+		totalAlerts += checkCORS(resp, w, targetURL, rc)
+		totalAlerts += checkHSTS(resp, w, targetURL, rc)
+		totalRecommendations += printServerInfo(resp, w, targetURL, rc)
+		totalAlerts += checkCookies(resp, w, targetURL, rc)
 
 		if sb != nil {
 			sb.Tick(1)
 		}
 	}
 
-	if totalIssues > 0 {
-		msg := fmt.Sprintf("├─ %s\n", ui.Red(fmt.Sprintf("[ALERT] Total issues found: %d", totalIssues)))
+	if totalAlerts > 0 {
+		msg := fmt.Sprintf("├─ %s\n", ui.Red(fmt.Sprintf("[ALERT] Total security issues found: %d", totalAlerts)))
 		if sb != nil {
 			sb.Log("%s", msg)
 		} else {
 			fmt.Fprint(w, msg)
 		}
 	} else {
-		msg := "├─ " + ui.Green("No header/cookie issues detected") + "\n"
+		msg := "├─ " + ui.Green("No exploitable header/cookie issues detected") + "\n"
+		if sb != nil {
+			sb.Log("%s", msg)
+		} else {
+			fmt.Fprint(w, msg)
+		}
+	}
+	if totalRecommendations > 0 {
+		msg := fmt.Sprintf("├─ %s\n", ui.Yellow(fmt.Sprintf("[INFO] Recommendations / info findings: %d", totalRecommendations)))
 		if sb != nil {
 			sb.Log("%s", msg)
 		} else {
@@ -177,7 +186,8 @@ func checkHSTS(resp *http.Response, w io.Writer, targetURL string, rc *ui.Report
 	return issues
 }
 
-func printServerInfo(resp *http.Response, w io.Writer, issues *int, targetURL string, rc *ui.ReportCollector) {
+func printServerInfo(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
+	recommendations := 0
 	if server := resp.Header.Get("Server"); server != "" {
 		fmt.Fprintf(w, "│  [INFO] Server: %s\n", server)
 	}
@@ -186,8 +196,9 @@ func printServerInfo(resp *http.Response, w io.Writer, issues *int, targetURL st
 		if rc != nil {
 			rc.AddFinding(ui.Finding{Type: ui.VulnHeader, Level: ui.LevelInfo, URL: targetURL, Payload: "X-Powered-By: " + powered, Detail: "info disclosure"})
 		}
-		*issues++
+		recommendations++
 	}
+	return recommendations
 }
 
 func checkCookies(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {

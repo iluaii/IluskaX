@@ -1,14 +1,14 @@
 package core
 
 import (
+	"IluskaX/internal/ui"
 	"context"
 	"fmt"
+	"golang.org/x/net/html"
 	"io"
 	"net/url"
 	"regexp"
 	"strings"
-	"golang.org/x/net/html"
-	"IluskaX/internal/ui"
 )
 
 type JSEndpoint struct {
@@ -16,6 +16,7 @@ type JSEndpoint struct {
 	Params []string
 	Source string
 }
+
 var (
 	reStrPath     = regexp.MustCompile(`["'](/[a-zA-Z0-9_\-/]{2,}(?:\?[a-zA-Z0-9_\-=&]*)?)["']`)
 	reFetchQuoted = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*[\"']([^\"'`]+)[\"']")
@@ -37,7 +38,7 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 		}
 	}
 
-	logf("\n%s\n  JS PARSER STARTED\n%s\n", strings.Repeat("═", 60), strings.Repeat("═", 60))
+	logf("%s\n  JS PARSER STARTED\n%s\n", strings.Repeat("═", 60), strings.Repeat("═", 60))
 
 	if len(c.VisitedPages) == 0 {
 		logf("└─ No pages to scan\n")

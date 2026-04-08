@@ -14,7 +14,7 @@ import (
 )
 
 func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) bool {
-	fmt.Fprintln(w, "\n┌─ [PHASE 1] QUICK SQLi TEST - Analyzing response differences")
+	fmt.Fprintln(w, "┌─ [PHASE 1] QUICK SQLi TEST - Analyzing response differences")
 
 	f, err := os.Open(urlFile)
 	if err != nil {

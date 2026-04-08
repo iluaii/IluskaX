@@ -2,12 +2,15 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"IluskaX/internal/events"
 )
 
 const (
@@ -36,6 +39,13 @@ func Green(s string) string  { return colorGreen + colorBold + s + colorReset }
 func Yellow(s string) string { return colorYellow + s + colorReset }
 func Cyan(s string) string   { return colorCyan + s + colorReset }
 func Dim(s string) string    { return colorDim + s + colorReset }
+
+func RestoreTerminal(out io.Writer) {
+	if out == nil {
+		out = os.Stdout
+	}
+	fmt.Fprint(out, showCursor+colorReset+clearLine+cursorHome)
+}
 
 func Truncate(s string, max int) string {
 	runes := []rune(s)
@@ -205,6 +215,10 @@ type Finding struct {
 
 type StatusBar struct {
 	mu          sync.Mutex
+	out         io.Writer
+	emitter     *events.Emitter
+	silent      bool
+	partialLog  string
 	phase       string
 	scanned     int64
 	total       int64
@@ -215,17 +229,29 @@ type StatusBar struct {
 	lastSecTime time.Time
 	currentRPS  float64
 	active      bool
-	done        chan struct{}
-	lineCount   int
 }
 
 func NewStatusBar() *StatusBar {
+	return NewStatusBarWithEmitter(os.Stdout, nil)
+}
+
+func NewStatusBarWithEmitter(out io.Writer, emitter *events.Emitter) *StatusBar {
+	if out == nil {
+		out = os.Stdout
+	}
 	return &StatusBar{
+		out:         out,
+		emitter:     emitter,
 		startTime:   time.Now(),
 		phaseStart:  time.Now(),
 		lastSecTime: time.Now(),
-		done:        make(chan struct{}),
 	}
+}
+
+func (sb *StatusBar) SetSilent(silent bool) {
+	sb.mu.Lock()
+	sb.silent = silent
+	sb.mu.Unlock()
 }
 
 func (sb *StatusBar) SetPhase(name string, total int64) {
@@ -239,11 +265,22 @@ func (sb *StatusBar) SetPhase(name string, total int64) {
 	sb.lastSecTime = time.Now()
 	sb.currentRPS = 0
 	sb.mu.Unlock()
+	if sb.emitter != nil {
+		sb.emitter.Publish(events.Event{
+			Type:    events.EventPhaseStarted,
+			Source:  "status_bar",
+			Phase:   name,
+			Scanned: 0,
+			Total:   total,
+		})
+	}
 }
 
 func (sb *StatusBar) Tick(reqs int64) {
-	atomic.AddInt64(&sb.scanned, 1)
+	scanned := atomic.AddInt64(&sb.scanned, 1)
 	newTotal := atomic.AddInt64(&sb.reqCount, reqs)
+	total := atomic.LoadInt64(&sb.total)
+	phase := ""
 	sb.mu.Lock()
 	elapsed := time.Since(sb.lastSecTime).Seconds()
 	if elapsed >= 0.5 {
@@ -252,133 +289,149 @@ func (sb *StatusBar) Tick(reqs int64) {
 		sb.lastSecReqs = newTotal
 		sb.lastSecTime = time.Now()
 	}
+	phase = sb.phase
 	sb.mu.Unlock()
+	if sb.emitter != nil {
+		sb.emitter.Publish(events.Event{
+			Type:    events.EventPhaseProgress,
+			Source:  "status_bar",
+			Phase:   phase,
+			Scanned: scanned,
+			Total:   total,
+		})
+	}
 }
 
 func (sb *StatusBar) Start() {
 	sb.active = true
-	fmt.Print(hideCursor)
-	go func() {
-		ticker := time.NewTicker(150 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-sb.done:
-				return
-			case <-ticker.C:
-				sb.render()
-			}
-		}
-	}()
 }
 
 func (sb *StatusBar) Stop() {
-	if !sb.active {
-		return
-	}
 	sb.active = false
-	close(sb.done)
-	sb.mu.Lock()
-	lc := sb.lineCount
-	sb.lineCount = 0
-	sb.mu.Unlock()
-	clearN(lc)
-	fmt.Print(showCursor)
-}
-
-func clearN(n int) {
-	for i := 0; i < n; i++ {
-		fmt.Print(clearLine + cursorHome)
-		if i < n-1 {
-			fmt.Print(cursorUp)
-		}
+	if sb.partialLog != "" {
+		fmt.Fprintln(sb.out, sb.partialLog)
+		sb.partialLog = ""
 	}
 }
 
-func (sb *StatusBar) render() {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
+type statusWriter struct {
+	sb *StatusBar
+}
 
-	phase := sb.phase
-	scanned := atomic.LoadInt64(&sb.scanned)
-	total := sb.total
-	rps := sb.currentRPS
-	elapsed := time.Since(sb.startTime).Round(time.Second)
-	phaseElapsed := time.Since(sb.phaseStart).Round(time.Second)
+func NewStatusWriter(sb *StatusBar) io.Writer {
+	return &statusWriter{sb: sb}
+}
 
-	var progress float64
-	if total > 0 {
-		progress = float64(scanned) / float64(total)
-		if progress > 1 {
-			progress = 1
-		}
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if w == nil || w.sb == nil {
+		return len(p), nil
 	}
-
-	barWidth := 28
-	filled := int(float64(barWidth) * progress)
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-
-	var eta string
-	if rps > 0 && total > 0 && scanned < total {
-		remaining := float64(total-scanned) / rps
-		etaDur := time.Duration(remaining) * time.Second
-		eta = fmt.Sprintf(" ETA %s", etaDur.Round(time.Second))
-	}
-
-	line1 := fmt.Sprintf(" %s%s%s  %s[%d/%d]%s  %s%.1f rps%s  %s⏱ %s%s  %s⚡ %s%s%s",
-		colorCyan+colorBold, phase, colorReset,
-		colorGreen, scanned, total, colorReset,
-		colorYellow, rps, colorReset,
-		colorDim, elapsed, colorReset,
-		colorBlue, phaseElapsed, eta, colorReset,
-	)
-	progressLine := fmt.Sprintf(" %s%s%s  %s%.0f%%%s",
-		colorCyan, bar, colorReset,
-		colorBold, progress*100, colorReset,
-	)
-	divider := colorDim + strings.Repeat("─", 90) + colorReset
-
-	if sb.lineCount > 0 {
-		clearN(sb.lineCount)
-	}
-	fmt.Print(divider + "\n" + line1 + "\n" + progressLine)
-	sb.lineCount = 3
+	w.sb.writeLogChunk(string(p))
+	return len(p), nil
 }
 
 func (sb *StatusBar) Log(format string, args ...interface{}) {
-	sb.mu.Lock()
-	lc := sb.lineCount
-	sb.lineCount = 0
-	sb.mu.Unlock()
+	msg := fmt.Sprintf(format, args...)
+	sb.writeLogChunk(msg)
+}
 
-	clearN(lc)
-	fmt.Printf(format, args...)
+func (sb *StatusBar) writeLogChunk(chunk string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	normalized := strings.ReplaceAll(chunk, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	joined := sb.partialLog + normalized
+	lines := strings.Split(joined, "\n")
+
+	if strings.HasSuffix(joined, "\n") {
+		sb.partialLog = ""
+		if len(lines) > 0 {
+			lines = lines[:len(lines)-1]
+		}
+	} else {
+		sb.partialLog = lines[len(lines)-1]
+		lines = lines[:len(lines)-1]
+	}
+
+	if len(lines) == 0 {
+		return
+	}
+
+	msg := strings.Join(lines, "\n")
+	if msg != "" {
+		msg += "\n"
+	}
+
+	if !sb.silent {
+		fmt.Fprint(sb.out, msg)
+	}
+	if sb.emitter != nil && strings.TrimSpace(stripANSI(msg)) != "" {
+		sb.emitter.Publish(events.Event{
+			Type:    events.EventLogMessage,
+			Source:  "status_bar",
+			Message: msg,
+		})
+	}
 }
 
 type ReportCollector struct {
 	mu       sync.Mutex
+	emitter  *events.Emitter
 	findings []Finding
 	sitemap  []string
 	seenSM   map[string]bool
 }
 
 func NewReportCollector() *ReportCollector {
-	return &ReportCollector{seenSM: map[string]bool{}}
+	return NewReportCollectorWithEmitter(nil)
+}
+
+func NewReportCollectorWithEmitter(emitter *events.Emitter) *ReportCollector {
+	return &ReportCollector{
+		emitter: emitter,
+		seenSM:  map[string]bool{},
+	}
 }
 
 func (r *ReportCollector) AddFinding(f Finding) {
 	r.mu.Lock()
 	r.findings = append(r.findings, f)
 	r.mu.Unlock()
+	if r.emitter != nil {
+		r.emitter.Publish(events.Event{
+			Type:    events.EventFindingAdded,
+			Source:  "report_collector",
+			Message: f.Type.String(),
+			Payload: map[string]string{
+				"type":     f.Type.String(),
+				"level":    f.Level.String(),
+				"url":      f.URL,
+				"payload":  f.Payload,
+				"detail":   f.Detail,
+				"severity": f.Severity,
+			},
+		})
+	}
 }
 
 func (r *ReportCollector) AddSitemapURL(u string) {
 	r.mu.Lock()
+	added := false
 	if !r.seenSM[u] {
 		r.seenSM[u] = true
 		r.sitemap = append(r.sitemap, u)
+		added = true
 	}
 	r.mu.Unlock()
+	if added && r.emitter != nil {
+		r.emitter.Publish(events.Event{
+			Type:    events.EventSitemapAdded,
+			Source:  "report_collector",
+			Message: u,
+			Payload: map[string]string{"url": u},
+		})
+	}
 }
 
 func (r *ReportCollector) Findings() []Finding {
@@ -406,13 +459,17 @@ func PrintFindingsTable(findings []Finding, toTerm bool) string {
 		byType[f.Type] = append(byType[f.Type], f)
 	}
 	var out strings.Builder
+	wroteSection := false
 	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnHeader, VulnCookie} {
 		fs, ok := byType[vt]
 		if !ok {
 			continue
 		}
+		if wroteSection {
+			out.WriteString("\n")
+		}
 		out.WriteString(renderTable(vt, fs, toTerm))
-		out.WriteString("\n")
+		wroteSection = true
 	}
 	return out.String()
 }
@@ -422,9 +479,9 @@ func renderTable(vt VulnType, findings []Finding, toTerm bool) string {
 
 	title := vt.SectionTitle(len(findings))
 	if toTerm {
-		sb.WriteString("\n" + vt.titleColor() + title + colorReset + "\n")
+		sb.WriteString(vt.titleColor() + title + colorReset + "\n")
 	} else {
-		sb.WriteString("\n" + title + "\n")
+		sb.WriteString(title + "\n")
 	}
 
 	hasDetail := vt != VulnHeader && vt != VulnCookie
@@ -571,11 +628,11 @@ func PrintSummary(findings []Finding, startTime time.Time, toTerm bool) string {
 	line := strings.Repeat("═", width)
 
 	if toTerm {
-		sb.WriteString("\n" + colorBold + colorCyan + line + colorReset + "\n")
+		sb.WriteString(colorBold + colorCyan + line + colorReset + "\n")
 		sb.WriteString(colorBold + colorCyan + "  SCAN SUMMARY" + colorReset + "\n")
 		sb.WriteString(colorDim + line + colorReset + "\n")
 	} else {
-		sb.WriteString("\n" + line + "\n  SCAN SUMMARY\n" + line + "\n")
+		sb.WriteString(line + "\n  SCAN SUMMARY\n" + line + "\n")
 	}
 
 	total := 0

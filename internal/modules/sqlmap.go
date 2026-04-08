@@ -12,7 +12,7 @@ import (
 )
 
 func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phaseLabel string, flushSession bool, sb *ui.StatusBar, rc *ui.ReportCollector) bool {
-	fmt.Fprintf(w, "\n┌─ [%s] SQLMAP - SQL Injection Detection\n", phaseLabel)
+	fmt.Fprintf(w, "┌─ [%s] SQLMAP - SQL Injection Detection\n", phaseLabel)
 
 	baseArgs := []string{
 		"--batch",
@@ -149,7 +149,7 @@ func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, 
 	if len(forms) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\n┌─ [PHASE 3-POST] SQLMAP - POST Forms\n")
+	fmt.Fprintf(w, "┌─ [PHASE 3-POST] SQLMAP - POST Forms\n")
 	fmt.Fprintf(w, "├─ Testing %d POST forms\n", len(forms))
 
 	if sb != nil {

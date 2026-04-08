@@ -92,7 +92,7 @@ func (c *Crawler) FetchRobots(base *url.URL) {
 	}
 	defer resp.Body.Close()
 
-	fmt.Fprintf(c.Term, "\n[ROBOTS] Fetched robots.txt from %s\n", base.Host)
+	fmt.Fprintf(c.Term, "[ROBOTS] Fetched robots.txt from %s\n", base.Host)
 
 	sc := bufio.NewScanner(resp.Body)
 	userAgentMatch := false

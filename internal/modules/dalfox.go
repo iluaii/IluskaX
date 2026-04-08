@@ -32,7 +32,7 @@ func stripANSI(s string) string {
 }
 
 func DalfoxScan(urls []string, w io.Writer, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "\n┌─ [PHASE 4] DALFOX - XSS Detection")
+	fmt.Fprintln(w, "┌─ [PHASE 4] DALFOX - XSS Detection")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
 
 	if sb != nil {

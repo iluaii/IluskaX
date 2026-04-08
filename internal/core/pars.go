@@ -96,11 +96,11 @@ func (c *Crawler) Pars(
 	Traverse(doc, base, &links, &forms)
 
 	if sb != nil {
-		sb.Log("\n[CRAWL] %s (Depth: %d)\n", ui.Truncate(base.Path, 80), depr)
+		sb.Log("[CRAWL] %s (Depth: %d)\n", ui.Truncate(base.Path, 80), depr)
 		sb.Log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
 		sb.Tick(1)
 	} else {
-		c.Log("\n[CRAWL] %s (Depth: %d)\n", base.Path, depr)
+		c.Log("[CRAWL] %s (Depth: %d)\n", base.Path, depr)
 		c.Log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
 	}
 

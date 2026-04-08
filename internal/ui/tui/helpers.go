@@ -1,0 +1,322 @@
+package tui
+
+import (
+	"bufio"
+	"net/url"
+	"os"
+	"strings"
+)
+
+func (m model) totalVulns() int {
+	total := 0
+	for _, scan := range m.scans {
+		total += scan.vulnCount
+	}
+	return total
+}
+
+func (m model) totalWarnings() int {
+	total := 0
+	for _, scan := range m.scans {
+		total += scan.warnCount
+	}
+	return total
+}
+
+func (m model) totalInfos() int {
+	total := 0
+	for _, scan := range m.scans {
+		total += scan.infoCount
+	}
+	return total
+}
+
+func groupTargetsByHost(targets []string) map[string][]string {
+	grouped := make(map[string][]string)
+	for _, raw := range targets {
+		host := "unknown"
+		label := raw
+		if parsed, err := url.Parse(raw); err == nil && parsed.Host != "" {
+			host = parsed.Scheme + "://" + parsed.Host
+			label = parsed.RequestURI()
+			if label == "" {
+				label = "/"
+			}
+		}
+		grouped[host] = append(grouped[host], label)
+	}
+	return grouped
+}
+
+func renderTargetGroups(grouped map[string][]string) []string {
+	hosts := make([]string, 0, len(grouped))
+	for host := range grouped {
+		hosts = append(hosts, host)
+	}
+	sortStrings(hosts)
+
+	lines := make([]string, 0, len(grouped)*4)
+	for _, host := range hosts {
+		lines = append(lines, host)
+		items := grouped[host]
+		sortStrings(items)
+		for i, item := range items {
+			prefix := "├─ "
+			if i == len(items)-1 {
+				prefix = "└─ "
+			}
+			lines = append(lines, prefix+item)
+		}
+		lines = append(lines, "")
+	}
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func renderScanTargetGroups(scans []scanEntry) ([]string, int, int) {
+	lines := make([]string, 0, len(scans)*6)
+	scanCount := 0
+	targetCount := 0
+
+	for _, scan := range scans {
+		if len(scan.targets) == 0 {
+			continue
+		}
+		scanCount++
+		targetCount += len(scan.targets)
+		header := valueOrFallback(scan.target, scan.id) + " [" + strings.ToUpper(scan.status) + "]"
+		lines = append(lines, header)
+
+		grouped := groupTargetsByHost(scan.targets)
+		groupLines := renderTargetGroups(grouped)
+		for _, line := range groupLines {
+			if line == "" {
+				continue
+			}
+			lines = append(lines, "  "+line)
+		}
+		lines = append(lines, "")
+	}
+
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	return lines, scanCount, targetCount
+}
+
+func sortStrings(items []string) {
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if items[j] < items[i] {
+				items[i], items[j] = items[j], items[i]
+			}
+		}
+	}
+}
+
+func readLogPreview(path string, limit int) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := splitLines(string(data))
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" || isStructuralBlank(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
+}
+
+func parseCrawlPathFromLog(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := stripANSI(strings.TrimSpace(sc.Text()))
+		if !strings.Contains(line, "CRAWL COMPLETE:") {
+			continue
+		}
+		parts := strings.SplitN(line, "CRAWL COMPLETE:", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func readCrawlTargets(path string) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	seen := make(map[string]bool)
+	var targets []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "POST|") || seen[line] {
+			continue
+		}
+		seen[line] = true
+		targets = append(targets, line)
+	}
+	return targets
+}
+
+func (m *model) pushLog(line string) {
+	line = strings.TrimRight(line, " \t")
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	if isStructuralBlank(line) {
+		return
+	}
+	m.logs = append(m.logs, line)
+	if len(m.logs) > 500 {
+		m.logs = m.logs[len(m.logs)-500:]
+	}
+}
+
+func splitLines(s string) []string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.Split(s, "\n")
+}
+
+func isStructuralBlank(s string) bool {
+	replacer := strings.NewReplacer(
+		"│", "",
+		"├", "",
+		"└", "",
+		"─", "",
+		"╰", "",
+		"╭", "",
+		"╮", "",
+		"╯", "",
+		" ", "",
+		"\t", "",
+	)
+	return replacer.Replace(s) == ""
+}
+
+func detailTabNames() []string {
+	return []string{"Logs", "Findings", "Targets", "Control"}
+}
+
+func globalTabNames() []string {
+	return []string{"Dashboard", "Findings", "Targets", "History", "New Scan"}
+}
+
+func trimLastRune(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return s
+	}
+	return string(runes[:len(runes)-1])
+}
+
+func valueOrDash(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "-"
+	}
+	return v
+}
+
+func valueOrFallback(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
+}
+
+func placeholderValue(v, placeholder string) string {
+	if strings.TrimSpace(v) == "" {
+		return colorDim + placeholder + colorReset
+	}
+	return v
+}
+
+func sanitizeName(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	replacer := strings.NewReplacer("://", "_", "/", "_", "\\", "_", "?", "_", "&", "_", "=", "_", ":", "_", "|", "_", " ", "_")
+	return replacer.Replace(v)
+}
+
+func percent(scanned, total int64) int {
+	if total <= 0 {
+		return 0
+	}
+	if scanned >= total {
+		return 100
+	}
+	return int((scanned * 100) / total)
+}
+
+func shorten(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 3 || len([]rune(s)) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max-3]) + "..."
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inEscape {
+			if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		if ch == 0x1b {
+			inEscape = true
+			continue
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

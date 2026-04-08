@@ -47,6 +47,11 @@ func (c *Crawler) Pars(
 	default:
 	}
 
+	if parsed0, err := url.Parse(uri); err == nil && parsed0.Path == "" {
+		parsed0.Path = "/"
+		uri = parsed0.String()
+	}
+
 	if !c.TryMarkVisited(uri) {
 		return
 	}
@@ -56,11 +61,6 @@ func (c *Crawler) Pars(
 
 	if rc != nil {
 		rc.AddSitemapURL(uri)
-	}
-
-	if parsed0, err := url.Parse(uri); err == nil && parsed0.Path == "" {
-		parsed0.Path = "/"
-		uri = parsed0.String()
 	}
 
 	if c.IsDisallowed(uri) {
@@ -207,17 +207,9 @@ func (c *Crawler) writeLinks(
 				p2.Fragment = ""
 				normalized = p2.String()
 			}
-			c.mu.Lock()
-			alreadyVisited := c.visited[normalized]
-			if !alreadyVisited {
-				c.visited[normalized] = true
-			}
-			c.mu.Unlock()
-			if !alreadyVisited {
-				childWg.Add(1)
-				sem <- struct{}{}
-				go c.Pars(ctx, normalized, recurs, depr+1, depth, skipList, &childWg, sem, rc, sb)
-			}
+			childWg.Add(1)
+			sem <- struct{}{}
+			go c.Pars(ctx, normalized, recurs, depr+1, depth, skipList, &childWg, sem, rc, sb)
 		}
 	}
 	childWg.Wait()

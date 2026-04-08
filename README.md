@@ -222,15 +222,18 @@ Shows discovered issues collected during the running scan, separated from raw lo
 
 ### Targets
 
-Shows discovered scan targets grouped by host, so the output is easier to read than a flat URL list.
+In the global TUI view, `Targets` shows discovered targets grouped by scan, and inside each scan they are grouped by host.
+
+In the scan detail view, `Targets` shows only the targets collected for the selected scan.
 
 Example:
 
 ```text
-http://localhost:3000
-├─ /
-├─ /?q=1
-└─ /xss?q=test
+localhost [FINISHED]
+  http://localhost:3000
+  ├─ /
+  ├─ /?q=1
+  └─ /xss?q=test
 ```
 
 ### History

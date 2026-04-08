@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"IluskaX/internal/events"
@@ -24,6 +25,8 @@ const (
 	colorBlue   = "\033[38;5;39m"
 	colorYellow = "\033[38;5;226m"
 	colorRed    = "\033[38;5;196m"
+	cursorHide  = "\033[?25l"
+	cursorShow  = "\033[?25h"
 )
 
 type App struct {
@@ -97,7 +100,9 @@ type scanEntry struct {
 	total      int64
 	percent    int
 	startedAt  time.Time
+	endedAt    time.Time
 	reportPath string
+	donePath   string
 	lastEvent  string
 	vulnCount  int
 	warnCount  int
@@ -118,6 +123,7 @@ type model struct {
 	detailTab     detailTab
 	inDetail      bool
 	selectedScan  int
+	detailScan    int
 	scroll        int
 	statusMessage string
 	logs          []string
@@ -149,6 +155,7 @@ func (a *App) Start() {
 	if a == nil || a.emitter == nil || a.program != nil {
 		return
 	}
+	fmt.Fprint(os.Stdout, cursorHide)
 	a.program = tea.NewProgram(newModel(), tea.WithAltScreen())
 	a.wg.Add(2)
 	go func() {
@@ -184,6 +191,7 @@ func (a *App) Stop() {
 	})
 	a.program.Send(quitMsg{})
 	a.wg.Wait()
+	fmt.Fprint(os.Stdout, cursorShow)
 	a.program = nil
 }
 
@@ -219,7 +227,7 @@ func tickCmd() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(tickCmd(), tea.HideCursor)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -228,12 +236,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = v.Width
 		m.height = v.Height
 	case tickMsg:
-		if m.finished {
-			return m, nil
-		}
+		m.refreshExternalScans()
 		return m, tickCmd()
 	case quitMsg:
-		return m, tea.Quit
+		return m, tea.Sequence(tea.ShowCursor, tea.Quit)
 	case tea.KeyMsg:
 		return m.updateKey(v)
 	case eventMsg:
@@ -242,11 +248,65 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func interruptCmd() tea.Cmd {
+	return func() tea.Msg {
+		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+		return nil
+	}
+}
+
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !m.inDetail && m.globalTab == tabNewScan && (m.focus == focusHost || m.focus == focusFlags) {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, interruptCmd()
+		case "esc":
+			if m.finished {
+				return m, tea.Quit
+			}
+			return m, nil
+		case "tab":
+			m.globalTab = (m.globalTab + 1) % 5
+			m.scroll = 0
+			return m, nil
+		case "shift+tab":
+			m.globalTab = (m.globalTab + 4) % 5
+			m.scroll = 0
+			return m, nil
+		case "up":
+			if m.focus > focusHost {
+				m.focus--
+			}
+			return m, nil
+		case "down":
+			if m.focus < focusAction {
+				m.focus++
+			}
+			return m, nil
+		case "enter":
+			if m.focus == focusHost {
+				m.focus = focusFlags
+			} else {
+				m.focus = focusAction
+			}
+			return m, nil
+		case "backspace", "ctrl+h":
+			m.deleteInputChar()
+			return m, nil
+		case "space":
+			m.appendInput(" ")
+			return m, nil
+		}
+		if len(msg.Runes) > 0 {
+			m.appendInput(string(msg.Runes))
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
-	case "esc", "backspace":
+		return m, interruptCmd()
+	case "esc":
 		if m.finished && !m.inDetail {
 			return m, tea.Quit
 		}
@@ -319,6 +379,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.globalTab == tabDashboard && !m.inDetail && len(m.scans) > 0 {
 			m.inDetail = true
+			m.detailScan = m.selectedScan
 			m.detailTab = detailLogs
 			m.scroll = 0
 			m.statusMessage = "Opened scan details"
@@ -420,40 +481,42 @@ func (m *model) executeNewScanAction() {
 		return
 	}
 
-	logPath, err := launchBackgroundScan(target, flags)
+	logPath, donePath, err := launchBackgroundScan(target, flags)
 	if err != nil {
 		m.statusMessage = "Launch failed: " + err.Error()
 		return
 	}
-	item.status = "launched"
+	item.status = "running"
 	item.logPath = logPath
 	m.history = append([]launchItem{item}, m.history...)
 	m.scans = append(m.scans, scanEntry{
 		id:         fmt.Sprintf("launched-%d", item.createdAt.UnixNano()),
 		target:     target,
-		status:     "launched",
+		status:     "running",
 		phase:      "external",
 		startedAt:  item.createdAt,
 		lastEvent:  "Started from dashboard",
 		reportPath: logPath,
+		donePath:   donePath,
 	})
 	m.statusMessage = "Scan launched in background"
 	m.launchHost = ""
 	m.launchFlags = ""
 }
 
-func launchBackgroundScan(target, flags string) (string, error) {
+func launchBackgroundScan(target, flags string) (string, string, error) {
 	if err := os.MkdirAll("Poutput", 0755); err != nil {
-		return "", err
+		return "", "", err
 	}
 	tag := sanitizeName(target)
 	if tag == "" {
 		tag = "scan"
 	}
 	logPath := filepath.Join("Poutput", fmt.Sprintf("dashboard_%s_%s.log", tag, time.Now().Format("2006-01-02_15-04-05")))
+	donePath := logPath + ".done"
 	logFile, err := os.Create(logPath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	args := []string{"-u", target}
@@ -467,15 +530,20 @@ func launchBackgroundScan(target, flags string) (string, error) {
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		return "", err
+		return "", "", err
 	}
 
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
+		exitStatus := "ok"
+		if waitErr != nil {
+			exitStatus = waitErr.Error()
+		}
+		_ = os.WriteFile(donePath, []byte(exitStatus), 0644)
 		_ = logFile.Close()
 	}()
 
-	return logPath, nil
+	return logPath, donePath, nil
 }
 
 func (m *model) applyEvent(evt events.Event) {
@@ -490,6 +558,7 @@ func (m *model) applyEvent(evt events.Event) {
 			s.target = valueOrFallback(m.target, "current scan")
 			s.status = "running"
 			s.startedAt = evt.Timestamp
+			s.endedAt = time.Time{}
 			s.lastEvent = "Scan started"
 		})
 	case events.EventPhaseStarted:
@@ -561,6 +630,7 @@ func (m *model) applyEvent(evt events.Event) {
 		m.updateCurrentScan(func(s *scanEntry) {
 			s.status = "finished"
 			s.percent = 100
+			s.endedAt = evt.Timestamp
 			s.lastEvent = "Scan finished"
 		})
 		if m.target != "" {
@@ -588,6 +658,7 @@ func (m model) View() string {
 		width = 120
 	}
 	var sb strings.Builder
+	sb.WriteString(cursorHide)
 	sb.WriteString(m.renderHeader(width))
 	sb.WriteString("\n")
 	if m.inDetail {
@@ -606,6 +677,9 @@ func (m model) renderHeader(width int) string {
 	title := "IluskaX Control Center"
 	if m.inDetail {
 		title = "IluskaX Scan Details"
+		if scan, ok := m.selectedDetailScan(); ok {
+			title += " - " + shorten(scan.target, 32)
+		}
 	}
 	sb.WriteString(colorBold + colorCyan + " " + title + " " + colorReset)
 	sb.WriteString(colorDim + "Tab switch  Enter open/run  Esc back  q quit" + colorReset + "\n")
@@ -667,12 +741,14 @@ func (m model) renderDashboard(width int) string {
 	}
 	sb.WriteString("\n")
 	sb.WriteString(colorBold + " Dashboard Summary" + colorReset + "\n")
-	sb.WriteString(fmt.Sprintf("Running: %d   Queued: %d   Findings: vuln=%d warn=%d info=%d\n",
-		countStatus(m.scans, "running"), len(m.queue), m.totalVulns(), m.totalWarnings(), m.totalInfos()))
+	selected := m.selectedDashboardScan()
+	sb.WriteString(fmt.Sprintf("Overall: running=%d queued=%d scans=%d findings vuln=%d warn=%d info=%d\n",
+		countStatus(m.scans, "running"), len(m.queue), len(m.scans), m.totalVulns(), m.totalWarnings(), m.totalInfos()))
 	if len(m.scans) > 0 {
-		current := m.scans[0]
-		sb.WriteString(fmt.Sprintf("Current: %s | Phase: %s | Progress: %d%% | Elapsed: %s\n",
-			current.target, valueOrDash(current.phase), current.percent, time.Since(current.startedAt).Round(time.Second)))
+		sb.WriteString(fmt.Sprintf("Selected: %s | Status: %s | Phase: %s | Progress: %d%% | Elapsed: %s\n",
+			selected.target, strings.ToUpper(selected.status), valueOrDash(selected.phase), selected.percent, elapsedForScan(selected)))
+		sb.WriteString(fmt.Sprintf("Selected findings: vuln=%d warn=%d info=%d\n",
+			selected.vulnCount, selected.warnCount, selected.infoCount))
 	}
 	sb.WriteString("\n")
 	sb.WriteString(colorBold + " Actions" + colorReset + "\n")
@@ -692,6 +768,16 @@ func (m model) renderLogs(width int) string {
 		logHeight = 8
 	}
 	lines := m.logs
+	if scan, ok := m.selectedDetailScan(); ok && m.detailScan != 0 {
+		lines = readLogPreview(scan.reportPath, 400)
+		if len(lines) == 0 {
+			sb.WriteString("No log output available yet for this scan.\n")
+			if scan.reportPath != "" {
+				sb.WriteString(colorDim + "Expected log: " + scan.reportPath + colorReset + "\n")
+			}
+			return sb.String()
+		}
+	}
 	start := 0
 	if len(lines) > logHeight {
 		maxScroll := len(lines) - logHeight
@@ -720,6 +806,13 @@ func (m model) renderFindings(width int, detail bool) string {
 	}
 	sb.WriteString(colorBold + title + colorReset + "\n")
 	sb.WriteString(colorDim + strings.Repeat("─", maxInt(20, width-2)) + colorReset + "\n")
+	if detail && m.detailScan != 0 {
+		sb.WriteString("Detailed findings are only available for the active in-process scan right now.\n")
+		if scan, ok := m.selectedDetailScan(); ok && scan.reportPath != "" {
+			sb.WriteString(colorDim + "Background scan log: " + scan.reportPath + colorReset + "\n")
+		}
+		return sb.String()
+	}
 	if len(m.findings) == 0 {
 		sb.WriteString("No findings yet.\n")
 		return sb.String()
@@ -751,6 +844,10 @@ func (m model) renderTargets(width int, detail bool) string {
 	}
 	sb.WriteString(colorBold + title + colorReset + "\n")
 	sb.WriteString(colorDim + strings.Repeat("─", maxInt(20, width-2)) + colorReset + "\n")
+	if detail && m.detailScan != 0 {
+		sb.WriteString("Detailed targets are only tracked for the active in-process scan right now.\n")
+		return sb.String()
+	}
 	if len(m.targets) == 0 {
 		sb.WriteString("No targets discovered yet.\n")
 		return sb.String()
@@ -823,9 +920,9 @@ func (m model) renderNewScan(width int) string {
 
 func (m model) renderControl(width int) string {
 	var sb strings.Builder
-	current := scanEntry{}
-	if len(m.scans) > 0 {
-		current = m.scans[0]
+	current := scanEntry{target: "-", status: "-", phase: "-"}
+	if scan, ok := m.selectedDetailScan(); ok {
+		current = scan
 	}
 	sb.WriteString(colorBold + " Scan Control" + colorReset + "\n")
 	sb.WriteString(colorDim + strings.Repeat("─", maxInt(20, width-2)) + colorReset + "\n")
@@ -833,12 +930,12 @@ func (m model) renderControl(width int) string {
 	sb.WriteString(fmt.Sprintf("Status: %s\n", current.status))
 	sb.WriteString(fmt.Sprintf("Phase: %s\n", valueOrDash(current.phase)))
 	sb.WriteString(fmt.Sprintf("Progress: %d%% (%d/%d)\n", current.percent, current.scanned, current.total))
-	sb.WriteString(fmt.Sprintf("Elapsed: %s\n", time.Since(current.startedAt).Round(time.Second)))
+	sb.WriteString(fmt.Sprintf("Elapsed: %s\n", elapsedForScan(current)))
 	if current.reportPath != "" {
-		sb.WriteString(fmt.Sprintf("Report: %s\n", current.reportPath))
+		sb.WriteString(fmt.Sprintf("Output: %s\n", current.reportPath))
 	}
 	sb.WriteString("\n")
-	sb.WriteString("This detail view is for the current scan.\n")
+	sb.WriteString("This detail view is for the selected scan.\n")
 	sb.WriteString("Use Esc to return to the global dashboard and launch or queue more scans.\n")
 	return sb.String()
 }
@@ -925,6 +1022,60 @@ func countStatus(scans []scanEntry, status string) int {
 	return total
 }
 
+func (m model) selectedDashboardScan() scanEntry {
+	if len(m.scans) == 0 {
+		return scanEntry{target: "-", status: "-", phase: "-"}
+	}
+	if m.selectedScan < 0 {
+		return m.scans[0]
+	}
+	if m.selectedScan >= len(m.scans) {
+		return m.scans[len(m.scans)-1]
+	}
+	return m.scans[m.selectedScan]
+}
+
+func (m *model) refreshExternalScans() {
+	for i := range m.scans {
+		scan := &m.scans[i]
+		if scan.donePath == "" || scan.status == "finished" || scan.status == "failed" {
+			continue
+		}
+		data, err := os.ReadFile(scan.donePath)
+		if err != nil {
+			continue
+		}
+		result := strings.TrimSpace(string(data))
+		if result == "" || result == "ok" {
+			scan.status = "finished"
+			scan.percent = 100
+			scan.endedAt = time.Now()
+			scan.lastEvent = "Background scan finished"
+		} else {
+			scan.status = "failed"
+			scan.endedAt = time.Now()
+			scan.lastEvent = shorten(result, 80)
+		}
+	}
+}
+
+func (m model) selectedDetailScan() (scanEntry, bool) {
+	if m.detailScan < 0 || m.detailScan >= len(m.scans) {
+		return scanEntry{}, false
+	}
+	return m.scans[m.detailScan], true
+}
+
+func elapsedForScan(scan scanEntry) time.Duration {
+	if scan.startedAt.IsZero() {
+		return 0
+	}
+	if !scan.endedAt.IsZero() {
+		return scan.endedAt.Sub(scan.startedAt).Round(time.Second)
+	}
+	return time.Since(scan.startedAt).Round(time.Second)
+}
+
 func groupTargetsByHost(targets []string) map[string][]string {
 	grouped := make(map[string][]string)
 	for _, raw := range targets {
@@ -977,6 +1128,29 @@ func sortStrings(items []string) {
 			}
 		}
 	}
+}
+
+func readLogPreview(path string, limit int) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := splitLines(string(data))
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" || isStructuralBlank(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out
 }
 
 func (m *model) pushLog(line string) {

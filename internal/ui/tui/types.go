@@ -40,6 +40,7 @@ type globalTab int
 type detailTab int
 type actionMode int
 type inputFocus int
+type findingFilter int
 
 const (
 	tabDashboard globalTab = iota
@@ -67,6 +68,13 @@ const (
 	focusAction
 )
 
+const (
+	filterAll findingFilter = iota
+	filterVulnerability
+	filterWarning
+	filterInfo
+)
+
 type findingItem struct {
 	level   string
 	kind    string
@@ -87,6 +95,7 @@ type launchItem struct {
 type scanEntry struct {
 	id         string
 	target     string
+	flags      string
 	targets    []string
 	status     string
 	phase      string
@@ -98,6 +107,7 @@ type scanEntry struct {
 	reportPath string
 	donePath   string
 	crawlPath  string
+	pid        int
 	lastEvent  string
 	vulnCount  int
 	warnCount  int
@@ -120,7 +130,9 @@ type model struct {
 	selectedScan  int
 	detailScan    int
 	scroll        int
+	followLogs    bool
 	statusMessage string
+	statusUntil   time.Time
 	logs          []string
 	findings      []findingItem
 	targets       []string
@@ -132,4 +144,7 @@ type model struct {
 	launchFlags   string
 	action        actionMode
 	focus         inputFocus
+	findingFilter findingFilter
+	findingQuery  string
+	findingSearch bool
 }

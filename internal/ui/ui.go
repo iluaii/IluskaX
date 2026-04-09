@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -769,4 +770,72 @@ func WriteReport(path string, sitemap []string, findings []Finding, startTime ti
 	fmt.Fprint(f, PrintFindingsTable(clean, false))
 	fmt.Fprint(f, PrintSummary(clean, startTime, false))
 	return nil
+}
+
+func WriteJSONReport(path string, sitemap []string, findings []Finding, startTime time.Time) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	clean := make([]Finding, len(findings))
+	for i, fi := range findings {
+		clean[i] = Finding{
+			Type:     fi.Type,
+			Level:    fi.Level,
+			URL:      stripANSI(fi.URL),
+			Payload:  stripANSI(fi.Payload),
+			Detail:   stripANSI(fi.Detail),
+			Severity: stripANSI(fi.Severity),
+		}
+	}
+
+	type jsonFinding struct {
+		Type     string `json:"type"`
+		Level    string `json:"level"`
+		URL      string `json:"url"`
+		Payload  string `json:"payload"`
+		Detail   string `json:"detail"`
+		Severity string `json:"severity"`
+	}
+	type jsonSummary struct {
+		ElapsedSeconds  int64 `json:"elapsed_seconds"`
+		TotalFindings   int   `json:"total_findings"`
+		Vulnerabilities int   `json:"vulnerabilities"`
+		Warnings        int   `json:"warnings"`
+		InfoFindings    int   `json:"info_findings"`
+	}
+	payload := struct {
+		Sitemap  []string      `json:"sitemap"`
+		Findings []jsonFinding `json:"findings"`
+		Summary  jsonSummary   `json:"summary"`
+	}{
+		Sitemap: sitemap,
+	}
+
+	for _, fi := range clean {
+		payload.Findings = append(payload.Findings, jsonFinding{
+			Type:     fi.Type.String(),
+			Level:    fi.Level.String(),
+			URL:      fi.URL,
+			Payload:  fi.Payload,
+			Detail:   fi.Detail,
+			Severity: fi.Severity,
+		})
+		switch fi.Level {
+		case LevelVulnerability:
+			payload.Summary.Vulnerabilities++
+		case LevelWarning:
+			payload.Summary.Warnings++
+		case LevelInfo:
+			payload.Summary.InfoFindings++
+		}
+	}
+	payload.Summary.TotalFindings = len(clean)
+	payload.Summary.ElapsedSeconds = int64(time.Since(startTime).Round(time.Second).Seconds())
+
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(payload)
 }

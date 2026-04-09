@@ -88,6 +88,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-skip-phase` | empty | Comma-separated phases to skip |
 | `-timeout` | `0` | Total crawl timeout in minutes, `0 = no limit` |
 | `-o` | empty | Output report path |
+| `-json-out` | empty | Output JSON report path |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## `pentest` Flags
@@ -104,6 +105,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-burp` | empty | Path to Burp request file for SQLMap |
 | `-rate` | `10` | Requests per second for HTTP probes |
 | `-o` | empty | Export final report to a custom path |
+| `-json-out` | empty | Export final report to JSON |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## UI Modes
@@ -202,6 +204,12 @@ If `-o` is provided, IluskaX also writes a custom export file with:
 - findings tables
 - final summary
 
+If `-json-out` is provided, IluskaX writes a machine-readable JSON report with:
+
+- sitemap
+- findings with level, type, url, payload, and detail
+- summary counts for vulnerabilities, warnings, info findings, and elapsed time
+
 ## TUI Overview
 
 ### Dashboard
@@ -219,6 +227,14 @@ Press `Enter` on the selected scan to open its detail view.
 ### Findings
 
 Shows discovered issues collected during the running scan, separated from raw logs.
+
+You can filter and search directly in the TUI:
+
+- `0` all findings
+- `1` vulnerabilities only
+- `2` warnings only
+- `3` info only
+- `/` enter search mode
 
 ### Targets
 
@@ -239,6 +255,10 @@ localhost [FINISHED]
 ### History
 
 Shows scans that were launched or finished during the current TUI session, plus queued items.
+
+Finished and launched scan history is persisted to `Poutput/tui_history.json`, so it stays available between TUI launches.
+
+Press `x` in the `History` tab to clear the saved history without deleting files manually.
 
 ### New Scan
 
@@ -261,8 +281,13 @@ You can:
 - `Enter` opens scan details or confirms the current action in `New Scan`
 - `Esc` returns from scan details to the global tabs
 - after a scan finishes, `Esc` exits the TUI and returns to normal terminal output
-- `r` in `New Scan` runs immediately
-- `q` in `New Scan` adds the prepared scan to the queue
+- `0`, `1`, `2`, `3` filter findings by severity in the `Findings` tab
+- `/` enters findings search mode
+- `x` clears saved history in the `History` tab
+- in `New Scan`, use `Up` and `Down` to move focus between fields
+- in `New Scan`, use `Left` and `Right` on the `Action` field to switch between `Run now` and `Queue`
+- in `Control`, `p` pauses or resumes the selected background scan
+- in `Control`, `r` restarts the selected background scan
 
 ## Skip Phases
 

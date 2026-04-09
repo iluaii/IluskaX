@@ -36,6 +36,7 @@ func main() {
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-5)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
 	outFile := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
+	jsonOut := flag.String("json-out", "", "Output JSON report file path")
 	uiMode := flag.String("ui", "cli", "UI mode: cli|tui")
 	flag.Parse()
 
@@ -162,6 +163,13 @@ func main() {
 			}
 		}
 	}
+	if *jsonOut != "" && !*pentest {
+		if err := ui.WriteJSONReport(*jsonOut, rc.Sitemap(), rc.Findings(), startTime); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Failed to write JSON report: %v\n", err)
+		} else {
+			fmt.Printf("[+] JSON report written: %s\n", *jsonOut)
+		}
+	}
 
 	if *pentest {
 		fmt.Println("\n[*] Starting pentest scan...")
@@ -189,6 +197,9 @@ func main() {
 		if *outFile != "" {
 			pentestArgs = append(pentestArgs, "-o", *outFile)
 		}
+		if *jsonOut != "" {
+			pentestArgs = append(pentestArgs, "-json-out", *jsonOut)
+		}
 		if mode == ui.ModeTUI {
 			pentestArgs = append(pentestArgs, "-ui", "tui")
 		}
@@ -213,7 +224,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-o <report>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -rate          Requests per second (default: 10)")
@@ -225,6 +236,7 @@ func printUsage() {
 	fmt.Println("  -burp          Path to Burp request file for SQLMap")
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")
+	fmt.Println("  -json-out      Output JSON report file")
 	fmt.Println("  -ui            UI mode: cli|tui (default: cli)")
 	fmt.Println()
 	fmt.Println("Phases (for -skip-phase):")

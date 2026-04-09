@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 func (m model) View() string {
@@ -11,7 +12,6 @@ func (m model) View() string {
 		width = 120
 	}
 	var sb strings.Builder
-	sb.WriteString(cursorHide)
 	sb.WriteString(m.renderHeader(width))
 	sb.WriteString("\n")
 	if m.inDetail {
@@ -19,10 +19,11 @@ func (m model) View() string {
 	} else {
 		sb.WriteString(m.renderGlobalView(width))
 	}
-	if m.statusMessage != "" {
+	if m.statusMessage != "" && (m.statusUntil.IsZero() || time.Now().Before(m.statusUntil)) {
 		sb.WriteString("\n" + colorDim + m.statusMessage + colorReset)
 	}
-	return sb.String()
+	sb.WriteString("\n" + m.renderFooter(width))
+	return normalizeView(sb.String(), width, m.height)
 }
 
 func (m model) renderHeader(width int) string {
@@ -34,8 +35,7 @@ func (m model) renderHeader(width int) string {
 			title += " - " + shorten(scan.target, 32)
 		}
 	}
-	sb.WriteString(colorBold + colorCyan + " " + title + " " + colorReset)
-	sb.WriteString(colorDim + "Tab switch  Enter open/run  Esc back  q quit" + colorReset + "\n")
+	sb.WriteString(colorBold + colorCyan + " " + title + " " + colorReset + "\n")
 	sb.WriteString(colorDim + strings.Repeat("─", maxInt(30, width-2)) + colorReset + "\n")
 	if m.inDetail {
 		sb.WriteString(renderTabs(detailTabNames(), int(m.detailTab)))
@@ -107,7 +107,11 @@ func (m model) renderDashboard(width int) string {
 	sb.WriteString(colorBold + " Actions" + colorReset + "\n")
 	sb.WriteString("Enter: open selected scan   Tab: switch main tabs   New Scan tab: create another run or queue item\n")
 	if m.finished {
-		sb.WriteString(colorGreen + "\nCurrent scan finished. Press Esc to leave TUI." + colorReset + "\n")
+		if m.hasActiveBackgroundScans() {
+			sb.WriteString(colorYellow + "\nCurrent pentest session finished. Background scans are still active." + colorReset + "\n")
+		} else {
+			sb.WriteString(colorGreen + "\nAll scans finished. Press Esc to leave TUI." + colorReset + "\n")
+		}
 	}
 	return sb.String()
 }
@@ -120,9 +124,9 @@ func (m model) renderLogs(width int) string {
 	if logHeight < 8 {
 		logHeight = 8
 	}
-	lines := m.logs
+	lines := m.currentLogLines()
+	totalLines := len(lines)
 	if scan, ok := m.selectedDetailScan(); ok && m.detailScan != 0 {
-		lines = readLogPreview(scan.reportPath, 400)
 		if len(lines) == 0 {
 			sb.WriteString("No log output available yet for this scan.\n")
 			if scan.reportPath != "" {
@@ -134,19 +138,29 @@ func (m model) renderLogs(width int) string {
 	start := 0
 	if len(lines) > logHeight {
 		maxScroll := len(lines) - logHeight
-		if m.scroll > maxScroll {
-			m.scroll = maxScroll
+		if m.followLogs {
+			start = maxScroll
+		} else {
+			if m.scroll > maxScroll {
+				m.scroll = maxScroll
+			}
+			start = m.scroll
 		}
-		start = maxScroll - m.scroll
 		lines = lines[start : start+logHeight]
 	}
 	for _, line := range lines {
 		sb.WriteString(line + "\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString(colorDim + fmt.Sprintf("Showing %d/%d log lines", len(lines), len(m.logs)) + colorReset + "\n")
-	if m.finished {
-		sb.WriteString(colorGreen + "Scan finished. Press Esc to close TUI." + colorReset + "\n")
+	sb.WriteString(colorDim + fmt.Sprintf("Showing %d/%d log lines", len(lines), totalLines) + colorReset + "\n")
+	if scan, ok := m.selectedDetailScan(); ok {
+		if scan.status == "running" || scan.status == "paused" {
+			sb.WriteString(colorYellow + "Selected background scan is still active." + colorReset + "\n")
+		} else if m.finished && !m.hasActiveBackgroundScans() {
+			sb.WriteString(colorGreen + "All scans finished. Press Esc to close TUI." + colorReset + "\n")
+		}
+	} else if m.finished && !m.hasActiveBackgroundScans() {
+		sb.WriteString(colorGreen + "All scans finished. Press Esc to close TUI." + colorReset + "\n")
 	}
 	return sb.String()
 }
@@ -166,11 +180,17 @@ func (m model) renderFindings(width int, detail bool) string {
 		}
 		return sb.String()
 	}
-	if len(m.findings) == 0 {
+	filtered := filteredFindings(m)
+	sb.WriteString(colorDim + fmt.Sprintf("Filter: %s", findingFilterLabel(m.findingFilter)) + colorReset)
+	if strings.TrimSpace(m.findingQuery) != "" {
+		sb.WriteString(colorDim + " | Search: " + m.findingQuery + colorReset)
+	}
+	sb.WriteString("\n")
+	if len(filtered) == 0 {
 		sb.WriteString("No findings yet.\n")
 		return sb.String()
 	}
-	for _, item := range m.findings {
+	for _, item := range filtered {
 		levelColor := colorCyan
 		switch item.level {
 		case "vulnerability":
@@ -246,6 +266,7 @@ func (m model) renderHistory(width int) string {
 	sb.WriteString(colorDim + strings.Repeat("─", maxInt(20, width-2)) + colorReset + "\n")
 	if len(m.history) == 0 && len(m.queue) == 0 {
 		sb.WriteString("No history yet.\n")
+		sb.WriteString(colorDim + "\nPress x to clear persisted history." + colorReset + "\n")
 		return sb.String()
 	}
 	for _, item := range m.history {
@@ -262,6 +283,7 @@ func (m model) renderHistory(width int) string {
 			sb.WriteString("  " + item.command + "\n")
 		}
 	}
+	sb.WriteString(colorDim + "\nPress x to clear persisted history." + colorReset + "\n")
 	return sb.String()
 }
 
@@ -280,7 +302,7 @@ func (m model) renderNewScan(width int) string {
 	}
 	sb.WriteString(colorBold + "Command Preview" + colorReset + "\n")
 	sb.WriteString(colorDim + cmd + colorReset + "\n\n")
-	sb.WriteString("Enter: next field / execute action   R: run now   Q: queue   Left/Right: switch action\n")
+	sb.WriteString("Enter: next field / execute action   Left/Right: switch action\n")
 	return sb.String()
 }
 
@@ -301,8 +323,22 @@ func (m model) renderControl(width int) string {
 		sb.WriteString(fmt.Sprintf("Output: %s\n", current.reportPath))
 	}
 	sb.WriteString("\n")
-	sb.WriteString("This detail view is for the selected scan.\n")
-	sb.WriteString("Use Esc to return to the global dashboard and launch or queue more scans.\n")
+	if current.phase == "external" && current.target != "-" {
+		pauseLabel := "Pause"
+		if current.status == "paused" {
+			pauseLabel = "Resume"
+		}
+		sb.WriteString(colorBold + "Actions" + colorReset + "\n")
+		sb.WriteString(renderControlButton("P", pauseLabel, colorYellow))
+		sb.WriteString("  ")
+		sb.WriteString(renderControlButton("R", "Restart", colorBlue))
+		sb.WriteString("\n")
+		sb.WriteString(colorDim + "Use the hotkeys above for the selected background scan." + colorReset + "\n")
+		sb.WriteString("Esc: return to the global dashboard\n")
+	} else {
+		sb.WriteString("Pause and restart are available for background scans launched from the TUI.\n")
+		sb.WriteString("Use Esc to return to the global dashboard and launch or queue more scans.\n")
+	}
 	return sb.String()
 }
 
@@ -337,7 +373,7 @@ func renderActionSelector(mode actionMode, active bool) string {
 		right = colorYellow + colorBold + "[ Queue ]" + colorReset
 	}
 	if active {
-		return colorBold + "Action:" + colorReset + " " + left + "  " + right + "\n"
+		return colorBlue + colorBold + "▸ Action:" + colorReset + " " + left + "  " + right + "\n"
 	}
 	return "Action: " + left + "  " + right + "\n"
 }
@@ -352,4 +388,30 @@ func renderScanLine(scan scanEntry) string {
 		scan.warnCount,
 		scan.infoCount,
 	)
+}
+
+func (m model) renderFooter(width int) string {
+	line := strings.Repeat("─", maxInt(20, width-2))
+	help := ""
+	switch {
+	case currentFindingsView(m) && m.findingSearch:
+		help = "Search mode: type to search, Enter/Esc apply, Backspace delete"
+	case currentFindingsView(m):
+		help = "Findings: 0 all, 1 vuln, 2 warn, 3 info, / search"
+	case !m.inDetail && m.globalTab == tabHistory:
+		help = "History: x clear saved history"
+	case !m.inDetail && m.globalTab == tabNewScan:
+		help = "New Scan: Up/Down move focus, Left/Right switch action, Enter execute"
+	case !m.inDetail && m.globalTab == tabDashboard:
+		help = "Dashboard: Up/Down select scan, Enter open details"
+	case m.inDetail && m.detailTab == detailControl:
+		help = "Control: p pause/resume, r restart, Esc back"
+	default:
+		help = "Tab switch views, Esc back, Ctrl+C interrupt"
+	}
+	return colorDim + line + "\n" + help + colorReset
+}
+
+func renderControlButton(key, label, color string) string {
+	return color + colorBold + "[ " + key + " " + label + " ]" + colorReset
 }

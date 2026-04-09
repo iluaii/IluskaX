@@ -15,6 +15,26 @@ func interruptCmd() tea.Cmd {
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if currentFindingsView(m) && m.findingSearch {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, interruptCmd()
+		case "esc", "enter":
+			m.findingSearch = false
+			return m, nil
+		case "backspace", "ctrl+h":
+			m.findingQuery = trimLastRune(m.findingQuery)
+			return m, nil
+		case "space":
+			m.findingQuery += " "
+			return m, nil
+		}
+		if len(msg.Runes) > 0 {
+			m.findingQuery += string(msg.Runes)
+			return m, nil
+		}
+	}
+
 	if !m.inDetail && m.globalTab == tabNewScan && (m.focus == focusHost || m.focus == focusFlags) {
 		switch msg.String() {
 		case "ctrl+c":
@@ -66,18 +86,27 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, interruptCmd()
 	case "esc":
-		if m.finished && !m.inDetail {
+		if m.finished && !m.inDetail && !m.hasActiveBackgroundScans() {
 			return m, tea.Quit
+		}
+		if m.finished && !m.inDetail && m.hasActiveBackgroundScans() {
+			m.setTransientStatus("Background scans are still running. Use q to quit anyway.")
+			return m, nil
 		}
 		if m.inDetail {
 			m.inDetail = false
 			m.scroll = 0
-			m.statusMessage = "Returned to dashboard"
+			m.followLogs = true
+			m.setTransientStatus("Returned to dashboard")
 		}
 		return m, nil
 	case "tab":
 		if m.inDetail {
 			m.detailTab = (m.detailTab + 1) % 4
+			if m.detailTab == detailLogs {
+				m.followLogs = true
+				m.scroll = 0
+			}
 		} else {
 			m.globalTab = (m.globalTab + 1) % 5
 		}
@@ -86,6 +115,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		if m.inDetail {
 			m.detailTab = (m.detailTab + 3) % 4
+			if m.detailTab == detailLogs {
+				m.followLogs = true
+				m.scroll = 0
+			}
 		} else {
 			m.globalTab = (m.globalTab + 4) % 5
 		}
@@ -94,6 +127,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "left", "h":
 		if m.inDetail {
 			m.detailTab = (m.detailTab + 3) % 4
+			if m.detailTab == detailLogs {
+				m.followLogs = true
+				m.scroll = 0
+			}
 		} else if m.globalTab == tabNewScan && m.focus == focusAction {
 			m.action = actionRunNow
 		} else {
@@ -103,6 +140,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "right", "l":
 		if m.inDetail {
 			m.detailTab = (m.detailTab + 1) % 4
+			if m.detailTab == detailLogs {
+				m.followLogs = true
+				m.scroll = 0
+			}
 		} else if m.globalTab == tabNewScan && m.focus == focusAction {
 			m.action = actionQueue
 		} else {
@@ -111,7 +152,16 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up", "k":
 		if m.inDetail {
-			if m.scroll > 0 {
+			if m.detailTab == detailLogs {
+				maxScroll := m.logMaxScroll()
+				if m.followLogs {
+					m.followLogs = false
+					m.scroll = maxScroll
+				}
+				if m.scroll > 0 {
+					m.scroll--
+				}
+			} else if m.scroll > 0 {
 				m.scroll--
 			}
 			return m, nil
@@ -125,7 +175,19 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "down", "j":
 		if m.inDetail {
-			m.scroll++
+			if m.detailTab == detailLogs {
+				maxScroll := m.logMaxScroll()
+				if !m.followLogs {
+					if m.scroll < maxScroll {
+						m.scroll++
+					} else {
+						m.followLogs = true
+						m.scroll = 0
+					}
+				}
+			} else {
+				m.scroll++
+			}
 			return m, nil
 		}
 		if m.globalTab == tabDashboard && m.selectedScan < len(m.scans)-1 {
@@ -141,7 +203,8 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScan = m.selectedScan
 			m.detailTab = detailLogs
 			m.scroll = 0
-			m.statusMessage = "Opened scan details"
+			m.followLogs = true
+			m.setTransientStatus("Opened scan details")
 			return m, nil
 		}
 		if !m.inDetail && m.globalTab == tabNewScan {
@@ -156,17 +219,42 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "r":
-		if !m.inDetail && m.globalTab == tabNewScan {
-			m.action = actionRunNow
-			m.executeNewScanAction()
-		}
-		return m, nil
-	case "q":
-		if !m.inDetail && m.globalTab == tabNewScan {
-			m.action = actionQueue
-			m.executeNewScanAction()
+		if m.inDetail && m.detailTab == detailControl {
+			m.restartSelectedScan()
 			return m, nil
 		}
+		return m, nil
+	case "p":
+		if m.inDetail && m.detailTab == detailControl {
+			m.togglePauseSelectedScan()
+			return m, nil
+		}
+	case "/":
+		if currentFindingsView(m) {
+			m.findingSearch = true
+			return m, nil
+		}
+	case "0", "1", "2", "3":
+		if currentFindingsView(m) {
+			switch msg.String() {
+			case "0":
+				m.findingFilter = filterAll
+			case "1":
+				m.findingFilter = filterVulnerability
+			case "2":
+				m.findingFilter = filterWarning
+			case "3":
+				m.findingFilter = filterInfo
+			}
+			return m, nil
+		}
+	case "x":
+		if !m.inDetail && m.globalTab == tabHistory {
+			m.clearHistory()
+			m.setTransientStatus("History cleared")
+			return m, nil
+		}
+	case "q":
 		return m, tea.Quit
 	}
 

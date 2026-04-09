@@ -87,9 +87,10 @@ func newModel() model {
 			status:    "running",
 			startedAt: now,
 		}},
-		history: make([]launchItem, 0, 16),
-		queue:   make([]launchItem, 0, 16),
-		action:  actionRunNow,
+		history:    loadPersistedHistory(),
+		queue:      make([]launchItem, 0, 16),
+		action:     actionRunNow,
+		followLogs: true,
 	}
 }
 

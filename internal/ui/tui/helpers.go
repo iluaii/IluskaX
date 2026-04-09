@@ -5,7 +5,60 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
+	"unicode/utf8"
 )
+
+func currentFindingsView(m model) bool {
+	if m.inDetail {
+		return m.detailTab == detailFindings
+	}
+	return m.globalTab == tabFindings
+}
+
+func filteredFindings(m model) []findingItem {
+	out := make([]findingItem, 0, len(m.findings))
+	query := strings.ToLower(strings.TrimSpace(m.findingQuery))
+	for _, item := range m.findings {
+		if !matchesFindingFilter(item, m.findingFilter) {
+			continue
+		}
+		if query != "" {
+			hay := strings.ToLower(item.kind + " " + item.url + " " + item.payload + " " + item.detail)
+			if !strings.Contains(hay, query) {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func matchesFindingFilter(item findingItem, filter findingFilter) bool {
+	switch filter {
+	case filterVulnerability:
+		return item.level == "vulnerability"
+	case filterWarning:
+		return item.level == "warning"
+	case filterInfo:
+		return item.level == "info"
+	default:
+		return true
+	}
+}
+
+func findingFilterLabel(filter findingFilter) string {
+	switch filter {
+	case filterVulnerability:
+		return "vulnerability"
+	case filterWarning:
+		return "warning"
+	case filterInfo:
+		return "info"
+	default:
+		return "all"
+	}
+}
 
 func (m model) totalVulns() int {
 	total := 0
@@ -319,4 +372,143 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (m model) hasActiveBackgroundScans() bool {
+	for i, scan := range m.scans {
+		if i == 0 {
+			continue
+		}
+		switch scan.status {
+		case "running", "paused", "queued":
+			return true
+		}
+	}
+	return false
+}
+
+func padViewHeight(view string, height int) string {
+	if height <= 0 {
+		return view
+	}
+	lineCount := strings.Count(view, "\n") + 1
+	if lineCount >= height {
+		return view
+	}
+	return view + strings.Repeat("\n", height-lineCount)
+}
+
+func padLineWidth(line string, width int) string {
+	if width <= 0 {
+		return line
+	}
+	visible := len([]rune(stripANSI(line)))
+	if visible >= width {
+		return line
+	}
+	return line + strings.Repeat(" ", width-visible)
+}
+
+func normalizeView(view string, width, height int) string {
+	targetWidth := maxInt(1, width-1)
+	lines := splitLines(view)
+	for i, line := range lines {
+		lines[i] = padLineWidth(truncateANSI(line, targetWidth), targetWidth)
+	}
+	if height > 0 && len(lines) > height {
+		lines = lines[:height]
+	}
+	if height > 0 && len(lines) < height {
+		for len(lines) < height {
+			lines = append(lines, strings.Repeat(" ", targetWidth))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) currentLogLines() []string {
+	if scan, ok := m.selectedDetailScan(); ok && m.detailScan != 0 {
+		return readLogPreview(scan.reportPath, 5000)
+	}
+	return m.logs
+}
+
+func (m model) logMaxScroll() int {
+	height := m.height - 10
+	if height < 8 {
+		height = 8
+	}
+	total := len(m.currentLogLines())
+	if total <= height {
+		return 0
+	}
+	return total - height
+}
+
+func truncateANSI(s string, maxVisible int) string {
+	if maxVisible <= 0 {
+		return ""
+	}
+	var out strings.Builder
+	visible := 0
+	inEscape := false
+	hadANSI := false
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inEscape {
+			out.WriteByte(ch)
+			if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		if ch == 0x1b {
+			hadANSI = true
+			inEscape = true
+			out.WriteByte(ch)
+			continue
+		}
+		if visible >= maxVisible {
+			break
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		out.WriteRune(r)
+		visible++
+		i += size - 1
+	}
+	if hadANSI {
+		out.WriteString(colorReset)
+	}
+	return out.String()
+}
+
+func (m *model) setTransientStatus(message string) {
+	if m == nil {
+		return
+	}
+	m.statusMessage = message
+	m.statusUntil = time.Now().Add(2 * time.Second)
+}
+
+func (m *model) setPersistentStatus(message string) {
+	if m == nil {
+		return
+	}
+	m.statusMessage = message
+	m.statusUntil = time.Time{}
+}
+
+func (m *model) refreshCompletionStatus() {
+	if m == nil || !m.finished {
+		return
+	}
+	if m.hasActiveBackgroundScans() {
+		m.setPersistentStatus("Current pentest session finished. Background scans are still active.")
+		return
+	}
+	m.setPersistentStatus("All scans finished. Press Esc to close TUI.")
 }

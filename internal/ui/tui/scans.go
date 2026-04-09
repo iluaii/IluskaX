@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"IluskaX/internal/events"
@@ -16,7 +17,7 @@ func (m *model) executeNewScanAction() {
 	target := strings.TrimSpace(m.launchHost)
 	flags := strings.TrimSpace(m.launchFlags)
 	if target == "" {
-		m.statusMessage = "Target is required for a new scan"
+		m.setTransientStatus("Target is required for a new scan")
 		return
 	}
 
@@ -46,39 +47,42 @@ func (m *model) executeNewScanAction() {
 		addScanTarget(&scan, target)
 		m.addTarget(target)
 		m.scans = append(m.scans, scan)
-		m.statusMessage = "Scan queued in dashboard"
+		m.setTransientStatus("Scan queued in dashboard")
 		return
 	}
 
-	logPath, donePath, err := launchBackgroundScan(target, flags)
+	logPath, donePath, pid, err := launchBackgroundScan(target, flags)
 	if err != nil {
-		m.statusMessage = "Launch failed: " + err.Error()
+		m.setTransientStatus("Launch failed: " + err.Error())
 		return
 	}
 	item.status = "running"
 	item.logPath = logPath
 	m.history = append([]launchItem{item}, m.history...)
+	m.persistHistory()
 	scan := scanEntry{
 		id:         fmt.Sprintf("launched-%d", item.createdAt.UnixNano()),
 		target:     target,
+		flags:      flags,
 		status:     "running",
 		phase:      "external",
 		startedAt:  item.createdAt,
 		lastEvent:  "Started from dashboard",
 		reportPath: logPath,
 		donePath:   donePath,
+		pid:        pid,
 	}
 	addScanTarget(&scan, target)
 	m.addTarget(target)
 	m.scans = append(m.scans, scan)
-	m.statusMessage = "Scan launched in background"
+	m.setTransientStatus("Scan launched in background")
 	m.launchHost = ""
 	m.launchFlags = ""
 }
 
-func launchBackgroundScan(target, flags string) (string, string, error) {
+func launchBackgroundScan(target, flags string) (string, string, int, error) {
 	if err := os.MkdirAll("Poutput", 0755); err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	tag := sanitizeName(target)
 	if tag == "" {
@@ -88,7 +92,7 @@ func launchBackgroundScan(target, flags string) (string, string, error) {
 	donePath := logPath + ".done"
 	logFile, err := os.Create(logPath)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 
 	args := []string{"-u", target}
@@ -102,7 +106,11 @@ func launchBackgroundScan(target, flags string) (string, string, error) {
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		return "", "", err
+		return "", "", 0, err
+	}
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
 	}
 
 	go func() {
@@ -115,7 +123,7 @@ func launchBackgroundScan(target, flags string) (string, string, error) {
 		_ = logFile.Close()
 	}()
 
-	return logPath, donePath, nil
+	return logPath, donePath, pid, nil
 }
 
 func (m *model) applyEvent(evt events.Event) {
@@ -205,13 +213,14 @@ func (m *model) applyEvent(evt events.Event) {
 		})
 	case events.EventScanFinished:
 		m.finished = true
-		m.statusMessage = fmt.Sprintf("Scan %s finished. Press Esc to close TUI.", valueOrFallback(m.target, "current"))
 		m.updateCurrentScan(func(s *scanEntry) {
 			s.status = "finished"
 			s.percent = 100
 			s.endedAt = evt.Timestamp
+			s.pid = 0
 			s.lastEvent = "Scan finished"
 		})
+		m.refreshCompletionStatus()
 		if m.target != "" {
 			m.history = append([]launchItem{{
 				target:    m.target,
@@ -220,8 +229,91 @@ func (m *model) applyEvent(evt events.Event) {
 				createdAt: evt.Timestamp,
 				logPath:   m.reportPath,
 			}}, m.history...)
+			m.persistHistory()
 		}
 	}
+}
+
+func (m *model) togglePauseSelectedScan() {
+	scan, idx, ok := m.selectedControllableScan()
+	if !ok {
+		m.setTransientStatus("Pause is only available for background scans launched from TUI")
+		return
+	}
+	if scan.pid <= 0 {
+		m.setTransientStatus("No running process found for selected scan")
+		return
+	}
+	sig := syscall.SIGSTOP
+	nextStatus := "paused"
+	nextEvent := "Paused from control tab"
+	message := "Scan paused"
+	if scan.status == "paused" {
+		sig = syscall.SIGCONT
+		nextStatus = "running"
+		nextEvent = "Resumed from control tab"
+		message = "Scan resumed"
+	}
+	if err := syscall.Kill(scan.pid, sig); err != nil {
+		m.setTransientStatus("Pause/resume failed: " + err.Error())
+		return
+	}
+	m.scans[idx].status = nextStatus
+	m.scans[idx].lastEvent = nextEvent
+	m.setTransientStatus(message)
+}
+
+func (m *model) restartSelectedScan() {
+	scan, idx, ok := m.selectedControllableScan()
+	if !ok {
+		m.setTransientStatus("Restart is only available for background scans launched from TUI")
+		return
+	}
+	if scan.status == "running" || scan.status == "paused" {
+		if scan.pid > 0 {
+			_ = syscall.Kill(scan.pid, syscall.SIGINT)
+		}
+	}
+	logPath, donePath, pid, err := launchBackgroundScan(scan.target, scan.flags)
+	if err != nil {
+		m.setTransientStatus("Restart failed: " + err.Error())
+		return
+	}
+	m.scans[idx].status = "running"
+	m.scans[idx].phase = "external"
+	m.scans[idx].startedAt = time.Now()
+	m.scans[idx].endedAt = time.Time{}
+	m.scans[idx].percent = 0
+	m.scans[idx].reportPath = logPath
+	m.scans[idx].donePath = donePath
+	m.scans[idx].crawlPath = ""
+	m.scans[idx].pid = pid
+	m.scans[idx].lastEvent = "Restarted from control tab"
+	item := launchItem{
+		target:    scan.target,
+		flags:     scan.flags,
+		command:   "./luska -u " + scan.target + strings.TrimPrefix(" "+strings.TrimSpace(scan.flags), " "),
+		status:    "running",
+		createdAt: time.Now(),
+		logPath:   logPath,
+	}
+	m.history = append([]launchItem{item}, m.history...)
+	m.persistHistory()
+	m.setTransientStatus("Scan restarted")
+}
+
+func (m model) selectedControllableScan() (scanEntry, int, bool) {
+	if !m.inDetail || m.detailTab != detailControl {
+		return scanEntry{}, -1, false
+	}
+	if m.detailScan <= 0 || m.detailScan >= len(m.scans) {
+		return scanEntry{}, -1, false
+	}
+	scan := m.scans[m.detailScan]
+	if scan.phase != "external" {
+		return scanEntry{}, -1, false
+	}
+	return scan, m.detailScan, true
 }
 
 func (m *model) updateCurrentScan(fn func(*scanEntry)) {
@@ -283,10 +375,11 @@ func (m model) selectedDashboardScan() scanEntry {
 }
 
 func (m *model) refreshExternalScans() {
+	changed := false
 	for i := range m.scans {
 		scan := &m.scans[i]
 		m.syncExternalScanTargets(scan)
-		if scan.donePath == "" || scan.status == "finished" || scan.status == "failed" {
+		if scan.donePath == "" || scan.status == "finished" || scan.status == "failed" || scan.status == "paused" {
 			continue
 		}
 		data, err := os.ReadFile(scan.donePath)
@@ -298,14 +391,21 @@ func (m *model) refreshExternalScans() {
 			scan.status = "finished"
 			scan.percent = 100
 			scan.endedAt = time.Now()
+			scan.pid = 0
 			scan.lastEvent = "Background scan finished"
 			m.syncExternalScanTargets(scan)
+			changed = true
 		} else {
 			scan.status = "failed"
 			scan.endedAt = time.Now()
+			scan.pid = 0
 			scan.lastEvent = shorten(result, 80)
 			m.syncExternalScanTargets(scan)
+			changed = true
 		}
+	}
+	if changed {
+		m.refreshCompletionStatus()
 	}
 }
 

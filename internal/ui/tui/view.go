@@ -109,6 +109,9 @@ func (m model) renderDashboard(width int) string {
 	sb.WriteString(colorBold + " Actions" + colorReset + "\n")
 	sb.WriteString("Enter: open selected scan   Tab: switch main tabs   New Scan tab: create another run or queue item\n")
 	sb.WriteString(colorDim + "\nOpen the selected scan to inspect logs, findings, targets, or controls." + colorReset + "\n")
+	if msg := m.completionBannerMessage(); msg != "" {
+		sb.WriteString("\n" + colorGreen + msg + colorReset + "\n")
+	}
 	return sb.String()
 }
 
@@ -152,11 +155,11 @@ func (m model) renderLogs(width int) string {
 	if scan, ok := m.selectedDetailScan(); ok {
 		if scan.status == "running" || scan.status == "paused" {
 			sb.WriteString(colorYellow + "Selected background scan is still active." + colorReset + "\n")
-		} else if m.finished && !m.hasActiveBackgroundScans() {
-			sb.WriteString(colorGreen + "All scans finished. Press Esc to close TUI." + colorReset + "\n")
+		} else if msg := m.completionBannerMessage(); msg != "" {
+			sb.WriteString(colorGreen + msg + colorReset + "\n")
 		}
-	} else if m.finished && !m.hasActiveBackgroundScans() {
-		sb.WriteString(colorGreen + "All scans finished. Press Esc to close TUI." + colorReset + "\n")
+	} else if msg := m.completionBannerMessage(); msg != "" {
+		sb.WriteString(colorGreen + msg + colorReset + "\n")
 	}
 	return sb.String()
 }
@@ -391,6 +394,13 @@ func renderScanLine(scan scanEntry) string {
 		scan.warnCount,
 		scan.infoCount,
 	)
+}
+
+func (m model) completionBannerMessage() string {
+	if !m.finished || m.hasActiveBackgroundScans() {
+		return ""
+	}
+	return "All scans finished. Press Esc to close TUI."
 }
 
 func (m model) renderFooter(width int) string {

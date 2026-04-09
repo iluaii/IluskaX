@@ -80,7 +80,16 @@ func main() {
 	rc := session.Reports()
 	sb := session.StatusBar()
 	startTime := time.Now()
+	sessionStopped := false
+	stopSession := func() {
+		if sessionStopped {
+			return
+		}
+		sessionStopped = true
+		session.Stop()
+	}
 	defer ui.RestoreTerminal(os.Stdout)
+	defer stopSession()
 	if em := session.Emitter(); em != nil {
 		em.Publish(events.Event{
 			Type:    events.EventScanStarted,
@@ -108,7 +117,6 @@ func main() {
 
 	sb.SetPhase("CRAWL", 0)
 	session.Start()
-	defer session.Stop()
 
 	crawlerTerm := ui.NewStatusWriter(sb)
 	crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, parsed.Host)
@@ -141,18 +149,18 @@ func main() {
 	crawler.ScanJS(crawlerTerm, f, rc, sb)
 	f.Sync()
 
-	session.Stop()
+	var completionSummary strings.Builder
+	completionSummary.WriteString("\n" + sep + "\n")
+	completionSummary.WriteString(fmt.Sprintf("[+] CRAWL COMPLETE: %s\n", crawlPath))
+	completionSummary.WriteString(fmt.Sprintf("[+] URLs discovered: %d\n", len(rc.Sitemap())))
+	completionSummary.WriteString(sep + "\n")
 
-	fmt.Println("\n" + sep)
-	fmt.Printf("[+] CRAWL COMPLETE: %s\n", crawlPath)
-	fmt.Printf("[+] URLs discovered: %d\n", len(rc.Sitemap()))
-	fmt.Println(sep)
-
+	var exportSummary strings.Builder
 	if *outFile != "" && !*pentest {
 		if err := ui.WriteReport(*outFile, rc.Sitemap(), rc.Findings(), startTime); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] Failed to write report: %v\n", err)
+			exportSummary.WriteString(fmt.Sprintf("[ERROR] Failed to write report: %v\n", err))
 		} else {
-			fmt.Printf("[+] Report written: %s\n", *outFile)
+			exportSummary.WriteString(fmt.Sprintf("[+] Report written: %s\n", *outFile))
 			if em := session.Emitter(); em != nil {
 				em.Publish(events.Event{
 					Type:    events.EventReportWritten,
@@ -165,11 +173,34 @@ func main() {
 	}
 	if *jsonOut != "" && !*pentest {
 		if err := ui.WriteJSONReport(*jsonOut, rc.Sitemap(), rc.Findings(), startTime); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] Failed to write JSON report: %v\n", err)
+			exportSummary.WriteString(fmt.Sprintf("[ERROR] Failed to write JSON report: %v\n", err))
 		} else {
-			fmt.Printf("[+] JSON report written: %s\n", *jsonOut)
+			exportSummary.WriteString(fmt.Sprintf("[+] JSON report written: %s\n", *jsonOut))
 		}
 	}
+
+	if !*pentest {
+		if em := session.Emitter(); em != nil {
+			em.Publish(events.Event{
+				Type:    events.EventScanFinished,
+				Source:  "main",
+				Message: *targetURL,
+				Payload: map[string]string{"target": *targetURL},
+			})
+		}
+		if mode == ui.ModeTUI {
+			session.Wait()
+		}
+		stopSession()
+		fmt.Print(completionSummary.String())
+		if exportSummary.Len() > 0 {
+			fmt.Print(exportSummary.String())
+		}
+		return
+	}
+
+	stopSession()
+	fmt.Print(completionSummary.String())
 
 	if *pentest {
 		fmt.Println("\n[*] Starting pentest scan...")

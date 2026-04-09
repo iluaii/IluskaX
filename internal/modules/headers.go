@@ -114,7 +114,7 @@ func uniqueHosts(urls []string) []string {
 }
 
 func checkMissingHeaders(resp *http.Response, w io.Writer, targetURL string, rc *ui.ReportCollector) int {
-	issues := 0 // Создаем локальный счетчик
+	issues := 0
 	var missing []string
 	for _, h := range securityHeaders {
 		if resp.Header.Get(h) == "" {

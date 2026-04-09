@@ -544,8 +544,8 @@ func (m model) contextualStatusMessage() string {
 		return ""
 	}
 	if !m.inDetail {
-		switch m.statusMessage {
-		case "Current pentest session finished. Background scans are still active.", "All scans finished. Press Esc to close TUI.":
+		msg := strings.TrimSpace(m.statusMessage)
+		if strings.HasPrefix(msg, "Current pentest session finished.") || strings.HasPrefix(msg, "All scans finished.") {
 			return ""
 		}
 	}

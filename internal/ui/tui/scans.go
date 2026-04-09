@@ -234,6 +234,70 @@ func (m *model) applyEvent(evt events.Event) {
 	}
 }
 
+func (m *model) performConfirmedAction() {
+	switch m.confirmAction {
+	case confirmNewScan:
+		m.executeNewScanAction()
+	case confirmClearHistory:
+		m.clearHistory()
+		m.setTransientStatus("History cleared")
+	case confirmPauseResume:
+		m.togglePauseSelectedScan()
+	case confirmRestart:
+		m.restartSelectedScan()
+	case confirmStop:
+		m.stopSelectedScan()
+	}
+	m.clearConfirm()
+}
+
+func (m *model) requestNewScanConfirm() {
+	actionLabel := "run"
+	if m.action == actionQueue {
+		actionLabel = "queue"
+	}
+	target := strings.TrimSpace(m.launchHost)
+	if target == "" {
+		target = "<target>"
+	}
+	m.requestConfirm(confirmNewScan, fmt.Sprintf("Confirm %s for %s?", actionLabel, target))
+}
+
+func (m *model) requestClearHistoryConfirm() {
+	m.requestConfirm(confirmClearHistory, "Clear saved history and queued items?")
+}
+
+func (m *model) requestPauseResumeConfirm() {
+	scan, _, ok := m.selectedControllableScan()
+	if !ok {
+		m.setTransientStatus("Pause is only available for background scans launched from TUI")
+		return
+	}
+	label := "pause"
+	if scan.status == "paused" {
+		label = "resume"
+	}
+	m.requestConfirm(confirmPauseResume, fmt.Sprintf("Confirm %s for %s?", label, scan.target))
+}
+
+func (m *model) requestRestartConfirm() {
+	scan, _, ok := m.selectedControllableScan()
+	if !ok {
+		m.setTransientStatus("Restart is only available for background scans launched from TUI")
+		return
+	}
+	m.requestConfirm(confirmRestart, fmt.Sprintf("Restart %s?", scan.target))
+}
+
+func (m *model) requestStopConfirm() {
+	scan, _, ok := m.selectedControllableScan()
+	if !ok {
+		m.setTransientStatus("Stop is only available for background scans launched from TUI")
+		return
+	}
+	m.requestConfirm(confirmStop, fmt.Sprintf("Stop %s?", scan.target))
+}
+
 func (m *model) togglePauseSelectedScan() {
 	scan, idx, ok := m.selectedControllableScan()
 	if !ok {
@@ -271,6 +335,9 @@ func (m *model) restartSelectedScan() {
 	}
 	if scan.status == "running" || scan.status == "paused" {
 		if scan.pid > 0 {
+			if scan.status == "paused" {
+				_ = syscall.Kill(scan.pid, syscall.SIGCONT)
+			}
 			_ = syscall.Kill(scan.pid, syscall.SIGINT)
 		}
 	}
@@ -300,6 +367,28 @@ func (m *model) restartSelectedScan() {
 	m.history = append([]launchItem{item}, m.history...)
 	m.persistHistory()
 	m.setTransientStatus("Scan restarted")
+}
+
+func (m *model) stopSelectedScan() {
+	scan, idx, ok := m.selectedControllableScan()
+	if !ok {
+		m.setTransientStatus("Stop is only available for background scans launched from TUI")
+		return
+	}
+	if scan.pid > 0 {
+		if scan.status == "paused" {
+			_ = syscall.Kill(scan.pid, syscall.SIGCONT)
+		}
+		if err := syscall.Kill(scan.pid, syscall.SIGINT); err != nil {
+			m.setTransientStatus("Stop failed: " + err.Error())
+			return
+		}
+	}
+	m.scans[idx].status = "stopped"
+	m.scans[idx].endedAt = time.Now()
+	m.scans[idx].pid = 0
+	m.scans[idx].lastEvent = "Stopped from control tab"
+	m.setTransientStatus("Scan stopped")
 }
 
 func (m model) selectedControllableScan() (scanEntry, int, bool) {

@@ -19,8 +19,10 @@ func (m model) View() string {
 	} else {
 		sb.WriteString(m.renderGlobalView(width))
 	}
-	if m.statusMessage != "" && (m.statusUntil.IsZero() || time.Now().Before(m.statusUntil)) {
-		sb.WriteString("\n" + colorDim + m.statusMessage + colorReset)
+	if m.confirmAction != confirmNone && strings.TrimSpace(m.confirmMessage) != "" {
+		sb.WriteString("\n" + colorYellow + colorBold + "Confirm: " + m.confirmMessage + " [Enter/Y confirm, Esc/N cancel]" + colorReset)
+	} else if msg := m.contextualStatusMessage(); msg != "" && (m.statusUntil.IsZero() || time.Now().Before(m.statusUntil)) {
+		sb.WriteString("\n" + colorDim + msg + colorReset)
 	}
 	sb.WriteString("\n" + m.renderFooter(width))
 	return normalizeView(sb.String(), width, m.height)
@@ -99,20 +101,14 @@ func (m model) renderDashboard(width int) string {
 		countStatus(m.scans, "running"), len(m.queue), len(m.scans), m.totalVulns(), m.totalWarnings(), m.totalInfos()))
 	if len(m.scans) > 0 {
 		sb.WriteString(fmt.Sprintf("Selected: %s | Status: %s | Phase: %s | Progress: %d%% | Elapsed: %s\n",
-			selected.target, strings.ToUpper(selected.status), valueOrDash(selected.phase), selected.percent, elapsedForScan(selected)))
+			selected.target, renderStatusBadge(selected.status), valueOrDash(selected.phase), selected.percent, elapsedForScan(selected)))
 		sb.WriteString(fmt.Sprintf("Selected findings: vuln=%d warn=%d info=%d\n",
 			selected.vulnCount, selected.warnCount, selected.infoCount))
 	}
 	sb.WriteString("\n")
 	sb.WriteString(colorBold + " Actions" + colorReset + "\n")
 	sb.WriteString("Enter: open selected scan   Tab: switch main tabs   New Scan tab: create another run or queue item\n")
-	if m.finished {
-		if m.hasActiveBackgroundScans() {
-			sb.WriteString(colorYellow + "\nCurrent pentest session finished. Background scans are still active." + colorReset + "\n")
-		} else {
-			sb.WriteString(colorGreen + "\nAll scans finished. Press Esc to leave TUI." + colorReset + "\n")
-		}
-	}
+	sb.WriteString(colorDim + "\nOpen the selected scan to inspect logs, findings, targets, or controls." + colorReset + "\n")
 	return sb.String()
 }
 
@@ -270,7 +266,10 @@ func (m model) renderHistory(width int) string {
 		return sb.String()
 	}
 	for _, item := range m.history {
-		sb.WriteString(fmt.Sprintf("%s%s%s  %s\n", colorGreen, strings.ToUpper(item.status), colorReset, item.target))
+		if !isMeaningfulHistoryItem(item) {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("%s  %s\n", renderStatusBadge(item.status), item.target))
 		sb.WriteString("  " + item.command + "\n")
 		if item.logPath != "" {
 			sb.WriteString("  " + colorDim + item.logPath + colorReset + "\n")
@@ -279,7 +278,7 @@ func (m model) renderHistory(width int) string {
 	if len(m.queue) > 0 {
 		sb.WriteString("\n" + colorBold + " Queue" + colorReset + "\n")
 		for _, item := range m.queue {
-			sb.WriteString(fmt.Sprintf("%sQUEUED%s  %s\n", colorYellow, colorReset, item.target))
+			sb.WriteString(fmt.Sprintf("%s  %s\n", renderStatusBadge("queued"), item.target))
 			sb.WriteString("  " + item.command + "\n")
 		}
 	}
@@ -315,7 +314,7 @@ func (m model) renderControl(width int) string {
 	sb.WriteString(colorBold + " Scan Control" + colorReset + "\n")
 	sb.WriteString(colorDim + strings.Repeat("─", maxInt(20, width-2)) + colorReset + "\n")
 	sb.WriteString(fmt.Sprintf("Target: %s\n", current.target))
-	sb.WriteString(fmt.Sprintf("Status: %s\n", current.status))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", renderStatusBadge(current.status)))
 	sb.WriteString(fmt.Sprintf("Phase: %s\n", valueOrDash(current.phase)))
 	sb.WriteString(fmt.Sprintf("Progress: %d%% (%d/%d)\n", current.percent, current.scanned, current.total))
 	sb.WriteString(fmt.Sprintf("Elapsed: %s\n", elapsedForScan(current)))
@@ -332,11 +331,13 @@ func (m model) renderControl(width int) string {
 		sb.WriteString(renderControlButton("P", pauseLabel, colorYellow))
 		sb.WriteString("  ")
 		sb.WriteString(renderControlButton("R", "Restart", colorBlue))
+		sb.WriteString("  ")
+		sb.WriteString(renderControlButton("S", "Stop", colorRed))
 		sb.WriteString("\n")
 		sb.WriteString(colorDim + "Use the hotkeys above for the selected background scan." + colorReset + "\n")
 		sb.WriteString("Esc: return to the global dashboard\n")
 	} else {
-		sb.WriteString("Pause and restart are available for background scans launched from the TUI.\n")
+		sb.WriteString("Pause, restart, and stop are available for background scans launched from the TUI.\n")
 		sb.WriteString("Use Esc to return to the global dashboard and launch or queue more scans.\n")
 	}
 	return sb.String()
@@ -379,10 +380,12 @@ func renderActionSelector(mode actionMode, active bool) string {
 }
 
 func renderScanLine(scan scanEntry) string {
-	return fmt.Sprintf("%-18s  %-10s  %-18s  %3d%%  vuln=%d warn=%d info=%d",
-		shorten(scan.target, 18),
-		strings.ToUpper(scan.status),
-		shorten(valueOrDash(scan.phase), 18),
+	target := padRightPlain(shorten(scan.target, 18), 18)
+	phase := padRightPlain(shorten(valueOrDash(scan.phase), 18), 18)
+	return fmt.Sprintf("%s  %s  %s  %3d%%  vuln=%d warn=%d info=%d",
+		target,
+		renderStatusBadge(scan.status),
+		phase,
 		scan.percent,
 		scan.vulnCount,
 		scan.warnCount,
@@ -394,6 +397,8 @@ func (m model) renderFooter(width int) string {
 	line := strings.Repeat("─", maxInt(20, width-2))
 	help := ""
 	switch {
+	case m.confirmAction != confirmNone:
+		help = "Confirm action: Enter/Y approve, Esc/N cancel"
 	case currentFindingsView(m) && m.findingSearch:
 		help = "Search mode: type to search, Enter/Esc apply, Backspace delete"
 	case currentFindingsView(m):
@@ -405,7 +410,7 @@ func (m model) renderFooter(width int) string {
 	case !m.inDetail && m.globalTab == tabDashboard:
 		help = "Dashboard: Up/Down select scan, Enter open details"
 	case m.inDetail && m.detailTab == detailControl:
-		help = "Control: p pause/resume, r restart, Esc back"
+		help = "Control: p pause/resume, r restart, s stop, Esc back"
 	default:
 		help = "Tab switch views, Esc back, Ctrl+C interrupt"
 	}

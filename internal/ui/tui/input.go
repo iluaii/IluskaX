@@ -15,6 +15,22 @@ func interruptCmd() tea.Cmd {
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.confirmAction != confirmNone {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, interruptCmd()
+		case "enter", "y":
+			m.performConfirmedAction()
+			return m, nil
+		case "esc", "n":
+			m.clearConfirm()
+			m.setTransientStatus("Action canceled")
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
+
 	if currentFindingsView(m) && m.findingSearch {
 		switch msg.String() {
 		case "ctrl+c":
@@ -214,19 +230,24 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case focusFlags:
 				m.focus = focusAction
 			case focusAction:
-				m.executeNewScanAction()
+				m.requestNewScanConfirm()
 			}
 		}
 		return m, nil
 	case "r":
 		if m.inDetail && m.detailTab == detailControl {
-			m.restartSelectedScan()
+			m.requestRestartConfirm()
 			return m, nil
 		}
 		return m, nil
 	case "p":
 		if m.inDetail && m.detailTab == detailControl {
-			m.togglePauseSelectedScan()
+			m.requestPauseResumeConfirm()
+			return m, nil
+		}
+	case "s":
+		if m.inDetail && m.detailTab == detailControl {
+			m.requestStopConfirm()
 			return m, nil
 		}
 	case "/":
@@ -250,8 +271,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "x":
 		if !m.inDetail && m.globalTab == tabHistory {
-			m.clearHistory()
-			m.setTransientStatus("History cleared")
+			m.requestClearHistoryConfirm()
 			return m, nil
 		}
 	case "q":

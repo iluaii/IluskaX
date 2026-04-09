@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -502,6 +503,22 @@ func (m *model) setPersistentStatus(message string) {
 	m.statusUntil = time.Time{}
 }
 
+func (m *model) requestConfirm(action confirmAction, message string) {
+	if m == nil {
+		return
+	}
+	m.confirmAction = action
+	m.confirmMessage = message
+}
+
+func (m *model) clearConfirm() {
+	if m == nil {
+		return
+	}
+	m.confirmAction = confirmNone
+	m.confirmMessage = ""
+}
+
 func (m *model) refreshCompletionStatus() {
 	if m == nil || !m.finished {
 		return
@@ -511,4 +528,72 @@ func (m *model) refreshCompletionStatus() {
 		return
 	}
 	m.setPersistentStatus("All scans finished. Press Esc to close TUI.")
+}
+
+func isActiveScanStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running", "paused", "queued":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m model) contextualStatusMessage() string {
+	if strings.TrimSpace(m.statusMessage) == "" {
+		return ""
+	}
+	if !m.inDetail {
+		switch m.statusMessage {
+		case "Current pentest session finished. Background scans are still active.", "All scans finished. Press Esc to close TUI.":
+			return ""
+		}
+	}
+	if m.inDetail {
+		if scan, ok := m.selectedDetailScan(); ok && scan.phase == "external" && isActiveScanStatus(scan.status) {
+			return fmt.Sprintf("Selected background scan is still %s.", scan.status)
+		}
+		return m.statusMessage
+	}
+	if m.globalTab == tabDashboard {
+		selected := m.selectedDashboardScan()
+		if selected.phase == "external" && isActiveScanStatus(selected.status) {
+			return fmt.Sprintf("Selected background scan is still %s.", selected.status)
+		}
+	}
+	return m.statusMessage
+}
+
+func padRightPlain(s string, width int) string {
+	visible := len([]rune(stripANSI(s)))
+	if visible >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visible)
+}
+
+func renderStatusBadge(status string) string {
+	label := "[UNKNOWN ]"
+	color := colorDim
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running":
+		label = "[RUNNING ]"
+		color = colorBlue
+	case "paused":
+		label = "[PAUSED  ]"
+		color = colorYellow
+	case "finished":
+		label = "[FINISHED]"
+		color = colorGreen
+	case "queued":
+		label = "[QUEUED  ]"
+		color = colorYellow
+	case "failed":
+		label = "[FAILED  ]"
+		color = colorRed
+	case "stopped":
+		label = "[STOPPED ]"
+		color = colorDim
+	}
+	return color + colorBold + label + colorReset
 }

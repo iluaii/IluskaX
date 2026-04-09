@@ -41,6 +41,7 @@ type detailTab int
 type actionMode int
 type inputFocus int
 type findingFilter int
+type confirmAction int
 
 const (
 	tabDashboard globalTab = iota
@@ -73,6 +74,15 @@ const (
 	filterVulnerability
 	filterWarning
 	filterInfo
+)
+
+const (
+	confirmNone confirmAction = iota
+	confirmNewScan
+	confirmClearHistory
+	confirmPauseResume
+	confirmRestart
+	confirmStop
 )
 
 type findingItem struct {
@@ -115,36 +125,38 @@ type scanEntry struct {
 }
 
 type model struct {
-	width         int
-	height        int
-	target        string
-	currentPhase  string
-	scanned       int64
-	total         int64
-	startedAt     time.Time
-	reportPath    string
-	finished      bool
-	globalTab     globalTab
-	detailTab     detailTab
-	inDetail      bool
-	selectedScan  int
-	detailScan    int
-	scroll        int
-	followLogs    bool
-	statusMessage string
-	statusUntil   time.Time
-	logs          []string
-	findings      []findingItem
-	targets       []string
-	targetSeen    map[string]bool
-	scans         []scanEntry
-	history       []launchItem
-	queue         []launchItem
-	launchHost    string
-	launchFlags   string
-	action        actionMode
-	focus         inputFocus
-	findingFilter findingFilter
-	findingQuery  string
-	findingSearch bool
+	width          int
+	height         int
+	target         string
+	currentPhase   string
+	scanned        int64
+	total          int64
+	startedAt      time.Time
+	reportPath     string
+	finished       bool
+	globalTab      globalTab
+	detailTab      detailTab
+	inDetail       bool
+	selectedScan   int
+	detailScan     int
+	scroll         int
+	followLogs     bool
+	statusMessage  string
+	statusUntil    time.Time
+	confirmAction  confirmAction
+	confirmMessage string
+	logs           []string
+	findings       []findingItem
+	targets        []string
+	targetSeen     map[string]bool
+	scans          []scanEntry
+	history        []launchItem
+	queue          []launchItem
+	launchHost     string
+	launchFlags    string
+	action         actionMode
+	focus          inputFocus
+	findingFilter  findingFilter
+	findingQuery   string
+	findingSearch  bool
 }

@@ -7,6 +7,19 @@ Go-based web security scanner with two binaries:
 
 It can run as a simple CLI scanner or with a Bubble Tea TUI for the pentest phase.
 
+## Authorized Use Only
+
+IluskaX is created strictly for:
+
+- authorized bug bounty research
+- security testing in lab environments
+- scanning networks, hosts, and applications that you own
+- scanning targets where you have explicit written permission to test
+
+Do not use IluskaX against third-party infrastructure, websites, APIs, or networks without authorization.
+
+This project is not intended for unauthorized access, mass scanning of random targets, disruption, or illegal activity.
+
 ## Build
 
 ```bash
@@ -217,7 +230,7 @@ If `-json-out` is provided, IluskaX writes a machine-readable JSON report with:
 Shows the active scans list and current state for each scan:
 
 - target
-- status
+- status badge
 - current phase
 - progress percent
 - finding counters
@@ -270,8 +283,18 @@ You can:
 - add extra flags
 - choose `Run now` to launch a background `luska` process
 - choose `Queue` to store a scan in the local session queue
+- confirm the selected action before it executes
 
 `Run now` launches a new background process and writes its output to a log file in `Poutput/`.
+
+### Control
+
+For background scans launched from the TUI, the `Control` tab can:
+
+- pause or resume the selected scan
+- restart the selected scan
+- stop the selected scan
+- show a confirmation prompt before the action is applied
 
 ## TUI Controls
 
@@ -286,8 +309,11 @@ You can:
 - `x` clears saved history in the `History` tab
 - in `New Scan`, use `Up` and `Down` to move focus between fields
 - in `New Scan`, use `Left` and `Right` on the `Action` field to switch between `Run now` and `Queue`
+- in `New Scan`, use `Enter` on the `Action` field to open a confirmation prompt
+- use `Enter` or `y` to confirm actions, and `Esc` or `n` to cancel
 - in `Control`, `p` pauses or resumes the selected background scan
 - in `Control`, `r` restarts the selected background scan
+- in `Control`, `s` stops the selected background scan
 
 ## Skip Phases
 
@@ -317,6 +343,10 @@ For direct `pentest`, supported skip values are `1` through `5`.
 
 ## Legal
 
-Use this tool only on systems you own or on targets where you have explicit permission to test.
+IluskaX is intended only for authorized security work, including bug bounty programs, private labs, and infrastructure you own or are explicitly allowed to test.
 
-Unauthorized scanning may be illegal. You are responsible for how you use it.
+You must not use this project to scan, probe, attack, stress, disrupt, or enumerate systems without permission.
+
+The authors do not authorize illegal use of this software. The fact that this repository is public does not grant permission to test third-party targets.
+
+By using IluskaX, you are solely responsible for ensuring that your activity complies with all applicable laws, platform rules, contracts, and program policies.

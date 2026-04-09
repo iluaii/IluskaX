@@ -23,14 +23,18 @@ func loadPersistedHistory() []launchItem {
 	if err := json.Unmarshal(data, &store); err != nil {
 		return nil
 	}
-	return store.History
+	clean := sanitizeHistoryItems(store.History)
+	if len(clean) != len(store.History) {
+		_ = savePersistedHistory(clean)
+	}
+	return clean
 }
 
 func savePersistedHistory(history []launchItem) error {
 	if err := os.MkdirAll("Poutput", 0755); err != nil {
 		return err
 	}
-	store := historyStore{History: history}
+	store := historyStore{History: sanitizeHistoryItems(history)}
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
@@ -52,4 +56,19 @@ func (m *model) clearHistory() {
 	m.history = nil
 	m.queue = nil
 	_ = os.Remove(historyStorePath())
+}
+
+func sanitizeHistoryItems(items []launchItem) []launchItem {
+	clean := make([]launchItem, 0, len(items))
+	for _, item := range items {
+		if !isMeaningfulHistoryItem(item) {
+			continue
+		}
+		clean = append(clean, item)
+	}
+	return clean
+}
+
+func isMeaningfulHistoryItem(item launchItem) bool {
+	return item.target != "" || item.command != "" || item.status != "" || item.logPath != ""
 }

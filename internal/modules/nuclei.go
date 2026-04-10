@@ -9,20 +9,24 @@ import (
 	"IluskaX/internal/ui"
 )
 
-func NucleiScan(urlFile string, w io.Writer, sb *ui.StatusBar, rc *ui.ReportCollector) {
+func NucleiScan(urlFile string, w io.Writer, extRateLimit int, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	fmt.Fprintln(w, "┌─ [PHASE 2] NUCLEI - Template-Based Vulnerability Detection")
 
 	if sb != nil {
 		sb.SetPhase("NUCLEI", 1)
 	}
 
-	cmd := exec.Command("nuclei",
+	args := []string{
 		"-l", urlFile,
 		"-severity", "low,medium,high,critical",
 		"-silent",
 		"-timeout", "10",
 		"-retries", "1",
-	)
+	}
+	if extRateLimit > 0 {
+		args = append(args, "-rl", fmt.Sprintf("%d", extRateLimit))
+	}
+	cmd := exec.Command("nuclei", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(w, "├─ [WARN] nuclei error: %v\n", err)

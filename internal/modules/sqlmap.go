@@ -11,7 +11,7 @@ import (
 	"IluskaX/internal/ui"
 )
 
-func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phaseLabel string, flushSession bool, sb *ui.StatusBar, rc *ui.ReportCollector) bool {
+func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile string, extRateLimit int, phaseLabel string, flushSession bool, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) bool {
 	fmt.Fprintf(w, "┌─ [%s] SQLMAP - SQL Injection Detection\n", phaseLabel)
 
 	baseArgs := []string{
@@ -26,10 +26,16 @@ func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phase
 		"--retries=3",
 		"--time-sec=10",
 	}
+	if !flushSession {
+		baseArgs = removeArg(baseArgs, "--flush-session")
+	}
+	if extRateLimit > 0 {
+		baseArgs = append(baseArgs, "--threads=1", "--delay="+formatSQLMapDelay(extRateLimit))
+	}
 	if cookie != "" {
 		baseArgs = append(baseArgs, "--cookie="+cookie)
 		autoClient := &http.Client{Timeout: 15 * time.Second}
-		autoCookies := CollectCookieNames(urls, cookie, autoClient)
+		autoCookies := CollectCookieNames(urls, cookie, autoClient, limiter)
 		if len(autoCookies) > 0 {
 			fmt.Fprintf(w, "├─ Auto-discovered cookies for injection: %s\n", strings.Join(autoCookies, ", "))
 			baseArgs = append(baseArgs, "--cookie-param="+strings.Join(autoCookies, ","))
@@ -145,7 +151,7 @@ func SQLMapScan(urls []string, w io.Writer, level, risk, cookie, burpFile, phase
 	return false
 }
 
-func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) {
+func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, extRateLimit int, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	if len(forms) == 0 {
 		return
 	}
@@ -174,6 +180,9 @@ func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, 
 			"--time-sec=10",
 			"--flush-session",
 			"-v", "1",
+		}
+		if extRateLimit > 0 {
+			args = append(args, "--threads=1", "--delay="+formatSQLMapDelay(extRateLimit))
 		}
 		if cookie != "" {
 			args = append(args, "--cookie="+cookie)
@@ -216,8 +225,26 @@ func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, 
 	fmt.Fprintln(w, "└─ POST SQLMap complete")
 }
 
-func EscalateSQLMap(urls []string, w io.Writer, currentLevel, currentRisk, cookie, burpFile string, sb *ui.StatusBar, rc *ui.ReportCollector) {
+func EscalateSQLMap(urls []string, w io.Writer, currentLevel, currentRisk, cookie, burpFile string, extRateLimit int, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	nextLevel := fmt.Sprintf("%d", minInt(atoi(currentLevel)+1, 3))
 	nextRisk := fmt.Sprintf("%d", minInt(atoi(currentRisk)+1, 3))
-	SQLMapScan(urls, w, nextLevel, nextRisk, cookie, burpFile, "PHASE 3.1", true, sb, rc)
+	SQLMapScan(urls, w, nextLevel, nextRisk, cookie, burpFile, extRateLimit, "PHASE 3.1", true, limiter, sb, rc)
+}
+
+func removeArg(args []string, target string) []string {
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == target {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
+}
+
+func formatSQLMapDelay(extRateLimit int) string {
+	if extRateLimit <= 0 {
+		return "0"
+	}
+	return fmt.Sprintf("%.3f", 1/float64(extRateLimit))
 }

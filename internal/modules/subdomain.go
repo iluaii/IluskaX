@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
-func SubdomainEnum(hostname string, crawlFile *os.File, term io.Writer) []string {
+func SubdomainEnum(hostname string, crawlFile *os.File, term io.Writer, extRateLimit int) []string {
 	fmt.Fprintln(term, "\n"+strings.Repeat("=", 60))
 	fmt.Fprintf(term, "[PHASE 0] SUBDOMAIN ENUMERATION: %s\n", hostname)
 	fmt.Fprintln(term, strings.Repeat("=", 60))
 
-	cmd := exec.Command("subfinder", "-d", hostname, "-silent")
+	args := []string{"-d", hostname, "-silent"}
+	if extRateLimit > 0 {
+		args = append(args, "-rl", fmt.Sprintf("%d", extRateLimit))
+	}
+	cmd := exec.Command("subfinder", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		fmt.Fprintf(term, "[ERROR] subfinder failed: %v\n", err)

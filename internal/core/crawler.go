@@ -86,7 +86,7 @@ func (c *Crawler) Log(format string, args ...interface{}) {
 
 func (c *Crawler) FetchRobots(base *url.URL) {
 	robotsURL := base.Scheme + "://" + base.Host + "/robots.txt"
-	resp, err := c.Client.Get(robotsURL)
+	resp, err := c.Fetch(context.Background(), robotsURL)
 	if err != nil || resp.StatusCode != 200 {
 		return
 	}
@@ -142,5 +142,21 @@ func (c *Crawler) Fetch(ctx context.Context, uri string) (*http.Response, error)
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	return c.Client.Do(req)
+}
+
+func (c *Crawler) FetchWithHeaders(ctx context.Context, uri string, headers map[string]string) (*http.Response, error) {
+	<-c.Limiter
+	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	for key, value := range headers {
+		if key == "" || value == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
 	return c.Client.Do(req)
 }

@@ -140,7 +140,7 @@ func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limit
 	}
 
 	vulnerableCount += testPostForms(allURLFile, w, cookie, limiter, sb, rc)
-	vulnerableCount += testCookieInjection(allURLFile, w, cookie, sb, rc)
+	vulnerableCount += testCookieInjection(allURLFile, w, cookie, limiter, sb, rc)
 
 	fmt.Fprintln(w, "├─ Quick test complete")
 	if vulnerableCount > 0 {
@@ -278,7 +278,7 @@ func testPostForms(allURLFile string, w io.Writer, cookie string, limiter <-chan
 	return count
 }
 
-func testCookieInjection(allURLFile string, w io.Writer, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) int {
+func testCookieInjection(allURLFile string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) int {
 	autoClient := &http.Client{
 		Timeout: 25 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -318,7 +318,7 @@ func testCookieInjection(allURLFile string, w io.Writer, cookie string, sb *ui.S
 		scanURLs = append(scanURLs, l)
 	}
 
-	autoCookies := CollectCookieNames(scanURLs, cookie, autoClient)
+	autoCookies := CollectCookieNames(scanURLs, cookie, autoClient, limiter)
 
 	if cookie != "" {
 		seen := map[string]bool{}
@@ -389,6 +389,9 @@ func testCookieInjection(allURLFile string, w io.Writer, cookie string, sb *ui.S
 				}
 				req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
 				req.Header.Set("Cookie", strings.Join(parts, "; "))
+				if limiter != nil {
+					<-limiter
+				}
 				start := time.Now()
 				resp, err := autoClient.Do(req)
 				elapsed := time.Since(start)

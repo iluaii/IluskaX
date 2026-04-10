@@ -31,7 +31,7 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
-func DalfoxScan(urls []string, w io.Writer, cookie string, sb *ui.StatusBar, rc *ui.ReportCollector) {
+func DalfoxScan(urls []string, w io.Writer, cookie string, extRateLimit int, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	fmt.Fprintln(w, "┌─ [PHASE 4] DALFOX - XSS Detection")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
 
@@ -54,6 +54,13 @@ func DalfoxScan(urls []string, w io.Writer, cookie string, sb *ui.StatusBar, rc 
 		args := []string{"url", testURL, "--follow-redirects"}
 		if cookie != "" {
 			args = append(args, "--cookie", cookie)
+		}
+		if extRateLimit > 0 {
+			delayMS := 1000 / extRateLimit
+			if delayMS < 1 {
+				delayMS = 1
+			}
+			args = append(args, "--worker", "1", "--delay", fmt.Sprintf("%d", delayMS))
 		}
 		out, err := exec.Command("dalfox", args...).CombinedOutput()
 		outStr := string(out)

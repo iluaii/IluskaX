@@ -61,6 +61,12 @@ If a tool is missing, only that phase will fail or be skipped.
 ./luska -u https://example.com -ps -o report.txt
 ```
 
+### Crawl and pentest with separate internal and external rate limits
+
+```bash
+./luska -u https://example.com -ps -rate 10 -ext-rate 2
+```
+
 ### Pentest an existing crawl file
 
 ```bash
@@ -90,7 +96,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-rd` | `0` | Maximum recursion depth |
 | `-ps` | `false` | Run pentest after crawl |
 | `-sd` | `false` | Run subdomain enumeration before crawl |
-| `-rate` | `10` | Requests per second |
+| `-rate` | `10` | Requests per second for built-in crawl and pentest HTTP probes |
+| `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
 | `-c` | `5` | Max concurrent goroutines |
 | `-ignore-robots` | `false` | Ignore `robots.txt` restrictions |
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
@@ -116,10 +123,39 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
 | `-cookie` | empty | Cookie header for authenticated scanning |
 | `-burp` | empty | Path to Burp request file for SQLMap |
-| `-rate` | `10` | Requests per second for HTTP probes |
+| `-rate` | `10` | Requests per second for built-in pentest HTTP probes |
+| `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
 | `-o` | empty | Export final report to a custom path |
 | `-json-out` | empty | Export final report to JSON |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
+
+## Rate Limits
+
+- `-rate` controls built-in HTTP traffic generated directly by IluskaX
+- `-ext-rate` controls external tools and defaults to `0`, which means no limit
+
+Built-in traffic includes:
+
+- crawler page fetches
+- `robots.txt`
+- JS fetching during endpoint discovery
+- quick SQLi checks
+- POST and cookie injection probes
+- header and cookie analysis
+
+External tool rate limiting is applied to:
+
+- `subfinder`
+- `nuclei`
+- `sqlmap`
+- `dalfox`
+
+Example:
+
+```bash
+./luska -u https://example.com -ps -rate 10 -ext-rate 2
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -rate 10 -ext-rate 1
+```
 
 ## UI Modes
 
@@ -163,6 +199,8 @@ output/<hostname>|<datetime>.txt
 
 Uses `subfinder` and appends discovered subdomains to the crawl dataset.
 
+If `-ext-rate` is set, it is forwarded to `subfinder`.
+
 ### Phase 1: Quick SQLi Test
 
 Tests parameterized URLs and forms with fast checks:
@@ -178,6 +216,8 @@ If something suspicious is found, later SQLMap settings are escalated automatica
 
 Runs `nuclei` against discovered URLs.
 
+If `-ext-rate` is set, it is forwarded to `nuclei`.
+
 ### Phase 3: SQLMap
 
 Runs `sqlmap` against parameterized URLs and POST forms.
@@ -187,10 +227,13 @@ Supports:
 - automatic escalation after suspicious Phase 1 results
 - Burp request files via `-burp`
 - cookie header forwarding via `-cookie`
+- optional external rate limiting via `-ext-rate`
 
 ### Phase 4: Dalfox
 
 Runs `dalfox` against URLs with parameters to detect XSS.
+
+If `-ext-rate` is set, IluskaX lowers Dalfox throughput to approximate that rate.
 
 ### Phase 5: Header and Cookie Analysis
 

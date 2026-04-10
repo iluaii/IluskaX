@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type PostForm struct {
@@ -121,10 +122,13 @@ func IsStaticAsset(path string) bool {
 	return false
 }
 
-func CollectCookieNames(urls []string, cookie string, client *http.Client) []string {
+func CollectCookieNames(urls []string, cookie string, client *http.Client, limiter <-chan time.Time) []string {
 	seen := map[string]bool{}
 	var names []string
 	for _, u := range urls {
+		if limiter != nil {
+			<-limiter
+		}
 		req, err := http.NewRequest("GET", u, nil)
 		if err != nil {
 			continue

@@ -26,6 +26,7 @@ func main() {
 	pentest := flag.Bool("ps", false, "Run pentest scan after crawl")
 	subdomains := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
 	rateLimit := flag.Int("rate", 10, "Requests per second")
+	extRateLimit := flag.Int("ext-rate", 0, "Requests per second for external tools (0 = no limit)")
 	concurrency := flag.Int("c", 5, "Max concurrent goroutines")
 	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
 	sqlmapLevel := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
@@ -103,6 +104,9 @@ func main() {
 	fmt.Println("\n" + sep)
 	fmt.Printf("[*] CRAWLING STARTED: %s\n", *targetURL)
 	fmt.Printf("[*] RATE LIMIT: %d req/s | CONCURRENCY: %d\n", *rateLimit, *concurrency)
+	if *extRateLimit > 0 {
+		fmt.Printf("[*] EXTERNAL TOOL RATE LIMIT: %d req/s\n", *extRateLimit)
+	}
 	if len(skipList) > 0 {
 		fmt.Printf("[*] SKIPPING PATTERNS: %s\n", strings.Join(skipList, ", "))
 	}
@@ -112,7 +116,7 @@ func main() {
 	fmt.Println(sep)
 
 	if *subdomains {
-		modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"))
+		modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"), *extRateLimit)
 	}
 
 	sb.SetPhase("CRAWL", 0)
@@ -209,6 +213,8 @@ func main() {
 			"-f", crawlPath,
 			"-host", parsed.Hostname(),
 			"-date", date,
+			"-rate", fmt.Sprintf("%d", *rateLimit),
+			"-ext-rate", fmt.Sprintf("%d", *extRateLimit),
 		}
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
@@ -255,10 +261,11 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-c <n>] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-ext-rate <n>] [-c <n>] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -rate          Requests per second (default: 10)")
+	fmt.Println("  -ext-rate      Requests per second for external tools (default: 0 = no limit)")
 	fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
 	fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 	fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")

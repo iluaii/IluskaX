@@ -88,7 +88,7 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 							break
 						}
 						seenScripts[scriptURL] = true
-						sr, err := c.Client.Get(scriptURL)
+						sr, err := c.Fetch(context.Background(), scriptURL)
 						if err != nil {
 							break
 						}

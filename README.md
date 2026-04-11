@@ -67,6 +67,12 @@ If a tool is missing, only that phase will fail or be skipped.
 ./luska -u https://example.com -ps -rate 10 -ext-rate 2
 ```
 
+### Authenticated scan with cookies from a file
+
+```bash
+./luska -u https://example.com -cookie-file cookies.txt
+```
+
 ### Pentest an existing crawl file
 
 ```bash
@@ -102,7 +108,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-ignore-robots` | `false` | Ignore `robots.txt` restrictions |
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
-| `-cookie` | empty | Cookie header for authenticated scanning |
+| `-cookie` | empty | Cookie header for authenticated crawl and scanning |
+| `-cookie-file` | empty | Text file containing cookies for authenticated crawl and scanning |
 | `-burp` | empty | Path to Burp request file for SQLMap |
 | `-skip` | empty | Comma-separated path patterns to skip during crawl |
 | `-skip-phase` | empty | Comma-separated phases to skip |
@@ -122,6 +129,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
 | `-cookie` | empty | Cookie header for authenticated scanning |
+| `-cookie-file` | empty | Text file containing cookies for authenticated scanning |
 | `-burp` | empty | Path to Burp request file for SQLMap |
 | `-rate` | `10` | Requests per second for built-in pentest HTTP probes |
 | `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
@@ -155,6 +163,21 @@ Example:
 ```bash
 ./luska -u https://example.com -ps -rate 10 -ext-rate 2
 ./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -rate 10 -ext-rate 1
+```
+
+## Cookies
+
+- `-cookie` accepts a raw Cookie header string
+- `-cookie-file` accepts a text file with cookies
+- both flags can be used together
+- file lines are joined into one Cookie header
+- lines starting with `Cookie:` are accepted too
+
+Example `cookies.txt`:
+
+```text
+session=abc123
+csrftoken=def456
 ```
 
 ## UI Modes

@@ -8,11 +8,20 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 
 	"IluskaX/internal/ui"
 )
+
+const crawlEndpointTimeout = 20 * time.Second
+
+type crawlParseResult struct {
+	links []string
+	forms []Form
+	err   error
+}
 
 func (c *Crawler) TryMarkVisited(uri string) bool {
 	c.mu.Lock()
@@ -41,8 +50,11 @@ func (c *Crawler) Pars(
 		defer func() { <-sem }()
 	}
 
+	endpointCtx, cancel := context.WithTimeout(ctx, crawlEndpointTimeout)
+	defer cancel()
+
 	select {
-	case <-ctx.Done():
+	case <-endpointCtx.Done():
 		return
 	default:
 	}
@@ -68,8 +80,12 @@ func (c *Crawler) Pars(
 		return
 	}
 
-	resp, err := c.Fetch(ctx, uri)
+	resp, err := c.Fetch(endpointCtx, uri)
 	if err != nil {
+		if endpointCtx.Err() == context.DeadlineExceeded {
+			c.Log("  [SKIP] Endpoint timeout after 20s: %s\n", uri)
+			return
+		}
 		c.Log("  [ERROR] Failed to fetch %s: %v\n", uri, err)
 		return
 	}
@@ -79,21 +95,43 @@ func (c *Crawler) Pars(
 		c.Log("  [WARN] HTTP %d: %s\n", resp.StatusCode, uri)
 	}
 
-	doc, err := html.Parse(io.LimitReader(resp.Body, 10*1024*1024))
-	if err != nil {
-		c.Log("  [ERROR] Failed to parse HTML: %v\n", err)
-		return
-	}
-
 	base, err := url.Parse(uri)
 	if err != nil {
 		c.Log("  [ERROR] Invalid URL: %v\n", err)
 		return
 	}
 
+	parseDone := make(chan crawlParseResult, 1)
+	go func() {
+		doc, parseErr := html.Parse(io.LimitReader(resp.Body, 10*1024*1024))
+		if parseErr != nil {
+			parseDone <- crawlParseResult{err: parseErr}
+			return
+		}
+		var links []string
+		var forms []Form
+		Traverse(doc, base, &links, &forms)
+		parseDone <- crawlParseResult{links: links, forms: forms}
+	}()
+
 	var links []string
 	var forms []Form
-	Traverse(doc, base, &links, &forms)
+	select {
+	case <-endpointCtx.Done():
+		c.Log("  [SKIP] Endpoint timeout after 20s: %s\n", uri)
+		return
+	case result := <-parseDone:
+		if result.err != nil {
+			if endpointCtx.Err() == context.DeadlineExceeded {
+				c.Log("  [SKIP] Endpoint timeout after 20s: %s\n", uri)
+				return
+			}
+			c.Log("  [ERROR] Failed to parse HTML: %v\n", result.err)
+			return
+		}
+		links = result.links
+		forms = result.forms
+	}
 
 	if sb != nil {
 		sb.Log("[CRAWL] %s (Depth: %d)\n", ui.Truncate(base.Path, 80), depr)
@@ -104,16 +142,24 @@ func (c *Crawler) Pars(
 		c.Log("├─ Status: %d, Forms: %d, Links: %d\n", resp.StatusCode, len(forms), len(links))
 	}
 
-	c.writeForms(forms)
-	c.writeLinks(ctx, links, base, recurs, depr, depth, skipList, wg, sem, rc, sb)
+	if !c.writeForms(endpointCtx, uri, forms) {
+		return
+	}
+	c.writeLinks(ctx, endpointCtx, links, base, recurs, depr, depth, skipList, wg, sem, rc, sb)
 }
 
-func (c *Crawler) writeForms(forms []Form) {
+func (c *Crawler) writeForms(endpointCtx context.Context, uri string, forms []Form) bool {
 	if len(forms) == 0 {
-		return
+		return true
 	}
 	c.Log("├─ FORMS:\n")
 	for i, f := range forms {
+		select {
+		case <-endpointCtx.Done():
+			c.Log("  [SKIP] Endpoint timeout after 20s: %s\n", uri)
+			return false
+		default:
+		}
 		c.Log("│  ├─ [%d] %s %s\n", i+1, f.Method, f.Action)
 		var params []string
 		for _, inp := range f.Inputs {
@@ -135,10 +181,12 @@ func (c *Crawler) writeForms(forms []Form) {
 			}
 		}
 	}
+	return true
 }
 
 func (c *Crawler) writeLinks(
 	ctx context.Context,
+	endpointCtx context.Context,
 	links []string,
 	base *url.URL,
 	recurs bool,
@@ -154,9 +202,15 @@ func (c *Crawler) writeLinks(
 	}
 	c.Log("├─ LINKS:\n")
 	seenEndpoints := map[string]bool{}
-	var childWg sync.WaitGroup
 
 	for i, l := range links {
+		select {
+		case <-endpointCtx.Done():
+			c.Log("  [SKIP] Endpoint timeout after 20s: %s\n", base.String())
+			return
+		default:
+		}
+
 		parsed, _ := url.Parse(l)
 		if parsed == nil || parsed.Path == "" || parsed.Host == "" {
 			continue
@@ -207,12 +261,20 @@ func (c *Crawler) writeLinks(
 				p2.Fragment = ""
 				normalized = p2.String()
 			}
-			childWg.Add(1)
-			sem <- struct{}{}
-			go c.Pars(ctx, normalized, recurs, depr+1, depth, skipList, &childWg, sem, rc, sb)
+			select {
+			case <-endpointCtx.Done():
+				c.Log("  [SKIP] Endpoint timeout after 20s: %s\n", base.String())
+				return
+			case <-ctx.Done():
+				return
+			case sem <- struct{}{}:
+			}
+			if wg != nil {
+				wg.Add(1)
+			}
+			go c.Pars(ctx, normalized, recurs, depr+1, depth, skipList, wg, sem, rc, sb)
 		}
 	}
-	childWg.Wait()
 }
 
 func dedupeKey(parsed *url.URL) string {

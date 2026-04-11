@@ -9,7 +9,7 @@ import (
 	"IluskaX/internal/ui"
 )
 
-func NucleiScan(urlFile string, w io.Writer, extRateLimit int, sb *ui.StatusBar, rc *ui.ReportCollector) {
+func NucleiScan(urlFile string, w io.Writer, cookie string, extRateLimit int, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	fmt.Fprintln(w, "┌─ [PHASE 2] NUCLEI - Template-Based Vulnerability Detection")
 
 	if sb != nil {
@@ -22,6 +22,9 @@ func NucleiScan(urlFile string, w io.Writer, extRateLimit int, sb *ui.StatusBar,
 		"-silent",
 		"-timeout", "10",
 		"-retries", "1",
+	}
+	if cookie != "" {
+		args = append(args, "-H", "Cookie: "+cookie)
 	}
 	if extRateLimit > 0 {
 		args = append(args, "-rl", fmt.Sprintf("%d", extRateLimit))

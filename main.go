@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"IluskaX/internal/auth"
 	"IluskaX/internal/core"
 	"IluskaX/internal/events"
 	"IluskaX/internal/modules"
@@ -31,7 +32,8 @@ func main() {
 	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
 	sqlmapLevel := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
 	sqlmapRisk := flag.Int("sqlmap-risk", 0, "SQLMap starting risk (1-3), 0 = auto")
-	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
+	cookie := flag.String("cookie", "", "Cookie header for authenticated crawl and scanning")
+	cookieFile := flag.String("cookie-file", "", "Path to text file containing cookies for authenticated crawl and scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-5)")
@@ -43,6 +45,12 @@ func main() {
 
 	if *targetURL == "" {
 		printUsage()
+		return
+	}
+
+	resolvedCookie, err := auth.ResolveCookie(*cookie, *cookieFile)
+	if err != nil {
+		fmt.Printf("ERROR: Cannot read cookie input: %v\n", err)
 		return
 	}
 
@@ -123,7 +131,7 @@ func main() {
 	session.Start()
 
 	crawlerTerm := ui.NewStatusWriter(sb)
-	crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, parsed.Host)
+	crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, parsed.Host, resolvedCookie)
 	defer crawler.Stop()
 
 	if !*ignoreRobots {
@@ -228,6 +236,9 @@ func main() {
 		if *cookie != "" {
 			pentestArgs = append(pentestArgs, "-cookie", *cookie)
 		}
+		if *cookieFile != "" {
+			pentestArgs = append(pentestArgs, "-cookie-file", *cookieFile)
+		}
 		if *burpFile != "" {
 			pentestArgs = append(pentestArgs, "-burp", *burpFile)
 		}
@@ -261,7 +272,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-ext-rate <n>] [-c <n>] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-ext-rate <n>] [-c <n>] [-cookie <value>] [-cookie-file <path>] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -rate          Requests per second (default: 10)")
@@ -270,7 +281,8 @@ func printUsage() {
 	fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 	fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
 	fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
-	fmt.Println("  -cookie        Cookie for authenticated scanning")
+	fmt.Println("  -cookie        Cookie header for authenticated crawl and scanning")
+	fmt.Println("  -cookie-file   Text file containing cookies for authenticated crawl and scanning")
 	fmt.Println("  -burp          Path to Burp request file for SQLMap")
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")

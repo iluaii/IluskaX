@@ -9,6 +9,7 @@
 *.dylib
 
 .gocache
+*.txt
 
 #directory output
 output

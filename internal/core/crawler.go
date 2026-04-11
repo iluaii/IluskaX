@@ -23,9 +23,10 @@ type Crawler struct {
 	Term         io.Writer
 	File         io.Writer
 	ScopeHost    string
+	AuthCookie   string
 }
 
-func NewCrawler(ratePerSec int, term io.Writer, file io.Writer, scopeHost string) *Crawler {
+func NewCrawler(ratePerSec int, term io.Writer, file io.Writer, scopeHost, authCookie string) *Crawler {
 	ticker := time.NewTicker(time.Second / time.Duration(ratePerSec))
 	return &Crawler{
 		visited: make(map[string]bool),
@@ -40,9 +41,10 @@ func NewCrawler(ratePerSec int, term io.Writer, file io.Writer, scopeHost string
 				return nil
 			},
 		},
-		Term:      term,
-		File:      file,
-		ScopeHost: scopeHost,
+		Term:       term,
+		File:       file,
+		ScopeHost:  scopeHost,
+		AuthCookie: authCookie,
 	}
 }
 
@@ -141,7 +143,10 @@ func (c *Crawler) Fetch(ctx context.Context, uri string) (*http.Response, error)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+	if c.AuthCookie != "" {
+		req.Header.Set("Cookie", c.AuthCookie)
+	}
 	return c.Client.Do(req)
 }
 
@@ -151,12 +156,15 @@ func (c *Crawler) FetchWithHeaders(ctx context.Context, uri string, headers map[
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
 	for key, value := range headers {
 		if key == "" || value == "" {
 			continue
 		}
 		req.Header.Set(key, value)
+	}
+	if c.AuthCookie != "" && req.Header.Get("Cookie") == "" {
+		req.Header.Set("Cookie", c.AuthCookie)
 	}
 	return c.Client.Do(req)
 }

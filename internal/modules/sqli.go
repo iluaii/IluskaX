@@ -31,10 +31,7 @@ func QuickSQLiTest(urlFile, allURLFile string, w io.Writer, cookie string, limit
 		if err != nil {
 			return nil, 0, err
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
-		if cookie != "" {
-			req.Header.Set("Cookie", cookie)
-		}
+		ApplyHeaders(req, cookie)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, 0, err
@@ -237,10 +234,7 @@ func testPostForms(allURLFile string, w io.Writer, cookie string, limiter <-chan
 				continue
 			}
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
-			if cookie != "" {
-				req.Header.Set("Cookie", cookie)
-			}
+			ApplyHeaders(req, cookie)
 			<-limiter
 			start := time.Now()
 			resp, err := client.Do(req)
@@ -387,8 +381,7 @@ func testCookieInjection(allURLFile string, w io.Writer, cookie string, limiter 
 				if err != nil {
 					continue
 				}
-				req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
-				req.Header.Set("Cookie", strings.Join(parts, "; "))
+				ApplyHeaders(req, strings.Join(parts, "; "))
 				if limiter != nil {
 					<-limiter
 				}

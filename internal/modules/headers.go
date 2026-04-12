@@ -21,7 +21,7 @@ var securityHeaders = []string{
 	"Access-Control-Allow-Origin",
 }
 
-func HeaderCookieScan(urls []string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
+func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	fmt.Fprintln(w, "┌─ [PHASE 5] HEADER & COOKIE ANALYSIS")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
 
@@ -43,10 +43,7 @@ func HeaderCookieScan(urls []string, w io.Writer, cookie string, limiter <-chan 
 
 		<-limiter
 		req, _ := http.NewRequest("GET", targetURL, nil)
-		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
-		if cookie != "" {
-			req.Header.Set("Cookie", cookie)
-		}
+		ApplyHeaders(req, "")
 		resp, err := client.Do(req)
 		if err != nil {
 			fmt.Fprintf(w, "│  [ERROR] %v\n", err)

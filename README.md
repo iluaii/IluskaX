@@ -32,9 +32,10 @@ go build -o pentest ./cmd/pentest/main1.go
 
 ## Requirements
 
-Core crawl logic is pure Go, but some pentest phases rely on external tools in `$PATH`:
+Core crawl logic is pure Go, but some pentest phases rely on external tools in `$PATH` or at specific paths:
 
 - `subfinder` for subdomain enumeration
+- `httpx` at `~/go/bin/httpx` for subdomain probing (phase 0.1)
 - `nuclei` for template-based checks
 - `sqlmap` for SQL injection testing
 - `dalfox` for XSS testing
@@ -49,10 +50,22 @@ If a tool is missing, only that phase will fail or be skipped.
 ./luska -u https://example.com
 ```
 
+### Crawl with custom headers (bug bounty)
+
+```bash
+./luska -u https://example.com -H 'X-Bug-Bounty: yourhandle' -H 'X-Forwarded-For: 127.0.0.1'
+```
+
 ### Crawl and then run pentest
 
 ```bash
 ./luska -u https://example.com -ps
+```
+
+### Crawl and pentest with custom headers
+
+```bash
+./luska -u https://example.com -ps -H 'X-Bug-Bounty: yourhandle' -cookie 'session=abc123'
 ```
 
 ### Crawl and pentest with exported report
@@ -65,12 +78,6 @@ If a tool is missing, only that phase will fail or be skipped.
 
 ```bash
 ./luska -u https://example.com -ps -rate 10 -ext-rate 2
-```
-
-### Authenticated scan with cookies from a file
-
-```bash
-./luska -u https://example.com -cookie-file cookies.txt
 ```
 
 ### Pentest an existing crawl file
@@ -91,6 +98,12 @@ If a tool is missing, only that phase will fail or be skipped.
 ./luska -u https://example.com -ps -ui tui
 ```
 
+### Subdomain enumeration with httpx probe
+
+```bash
+./luska -u https://example.com -sd -ps
+```
+
 Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI mode and only the child `pentest` process uses the TUI.
 
 ## `luska` Flags
@@ -98,6 +111,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | Flag | Default | Description |
 |---|---|---|
 | `-u` | required | Target URL |
+| `-H` | empty | Custom header `Name: Value` (repeatable) |
 | `-r` | `false` | Enable recursive crawl |
 | `-rd` | `0` | Maximum recursion depth |
 | `-ps` | `false` | Run pentest after crawl |
@@ -108,8 +122,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-ignore-robots` | `false` | Ignore `robots.txt` restrictions |
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
-| `-cookie` | empty | Cookie header for authenticated crawl and scanning |
-| `-cookie-file` | empty | Text file containing cookies for authenticated crawl and scanning |
+| `-cookie` | empty | Cookie header for authenticated scanning |
 | `-burp` | empty | Path to Burp request file for SQLMap |
 | `-skip` | empty | Comma-separated path patterns to skip during crawl |
 | `-skip-phase` | empty | Comma-separated phases to skip |
@@ -123,19 +136,41 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | Flag | Default | Description |
 |---|---|---|
 | `-f` | required | Crawl output file |
+| `-H` | empty | Custom header `Name: Value` (repeatable) |
 | `-host` | `target` | Host label for output/report naming |
 | `-date` | current time | Date tag for output naming |
 | `-skip-phase` | empty | Comma-separated phases to skip |
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
 | `-cookie` | empty | Cookie header for authenticated scanning |
-| `-cookie-file` | empty | Text file containing cookies for authenticated scanning |
 | `-burp` | empty | Path to Burp request file for SQLMap |
 | `-rate` | `10` | Requests per second for built-in pentest HTTP probes |
 | `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
 | `-o` | empty | Export final report to a custom path |
 | `-json-out` | empty | Export final report to JSON |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
+
+## Custom Headers
+
+The `-H` flag injects headers into every HTTP request made by IluskaX's built-in scanner. This is important for bug bounty programs that require identification headers.
+
+```bash
+./luska -u https://example.com -ps \
+  -H 'X-Bug-Bounty: yourhandle' \
+  -H 'User-Agent: Mozilla/5.0 (custom)' \
+  -H 'X-Forwarded-For: 127.0.0.1'
+```
+
+Custom headers apply to:
+
+- crawler page fetches
+- robots.txt fetch
+- JS file fetching during endpoint discovery
+- quick SQLi checks
+- POST and cookie injection probes
+- header and cookie analysis requests
+
+Custom headers are automatically forwarded to `pentest` when launched via `luska -ps`.
 
 ## Rate Limits
 
@@ -154,6 +189,7 @@ Built-in traffic includes:
 External tool rate limiting is applied to:
 
 - `subfinder`
+- `httpx`
 - `nuclei`
 - `sqlmap`
 - `dalfox`
@@ -163,21 +199,6 @@ Example:
 ```bash
 ./luska -u https://example.com -ps -rate 10 -ext-rate 2
 ./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -rate 10 -ext-rate 1
-```
-
-## Cookies
-
-- `-cookie` accepts a raw Cookie header string
-- `-cookie-file` accepts a text file with cookies
-- both flags can be used together
-- file lines are joined into one Cookie header
-- lines starting with `Cookie:` are accepted too
-
-Example `cookies.txt`:
-
-```text
-session=abc123
-csrftoken=def456
 ```
 
 ## UI Modes
@@ -191,6 +212,7 @@ In TUI mode:
 - selecting a scan opens a detail view with `Logs`, `Findings`, `Targets`, and `Control`
 - live logs scroll in the viewport
 - older lines disappear from the visible area when the screen fills up
+- background scans launched from the TUI show their current phase and progress in real time by polling the log file
 - after the scan finishes, the TUI stays open and shows a completion message
 - press `Esc` to leave the finished TUI and print the final findings tables and summary
 
@@ -220,9 +242,15 @@ output/<hostname>|<datetime>.txt
 
 ### Phase 0: Subdomains
 
-Uses `subfinder` and appends discovered subdomains to the crawl dataset.
+Uses `subfinder` to discover subdomains. Found subdomains are not written to the crawl file directly — they are passed to phase 0.1 for validation first.
 
 If `-ext-rate` is set, it is forwarded to `subfinder`.
+
+### Phase 0.1: httpx Probe
+
+Runs `httpx` (at `~/go/bin/httpx`) against the subdomains found in phase 0. Only subdomains that respond with a valid HTTP response are written to the crawl file and added to the scan scope.
+
+If `-ext-rate` is set, it is forwarded to `httpx`.
 
 ### Phase 1: Quick SQLi Test
 
@@ -297,7 +325,7 @@ Shows the active scans list and current state for each scan:
 
 - target
 - status badge
-- current phase
+- current phase (polled from log for background scans)
 - progress percent
 - finding counters
 
@@ -346,7 +374,7 @@ Lets you prepare a new command from inside the TUI.
 You can:
 
 - enter a target URL
-- add extra flags
+- add extra flags (including `-H 'X-Bug-Bounty: handle'`)
 - choose `Run now` to launch a background `luska` process
 - choose `Queue` to store a scan in the local session queue
 - confirm the selected action before it executes
@@ -392,6 +420,7 @@ Example:
 Phase mapping:
 
 - `0` = subdomain enumeration
+- `0.1` = httpx probe (runs automatically after phase 0, cannot be skipped independently)
 - `1` = quick SQLi
 - `2` = nuclei
 - `3` = SQLMap
@@ -403,9 +432,11 @@ For direct `pentest`, supported skip values are `1` through `5`.
 ## Notes
 
 - User-Agent: `LuskaScanner/1.0`
+- custom `-H` headers override the default User-Agent if `User-Agent` is specified
 - crawl request timeout is short and optimized for scanning, not browsing
 - JS parsing and endpoint extraction intentionally prefer breadth over perfect semantic accuracy
 - TUI is intended for the pentest phase, not as a full-screen wrapper around the entire crawl pipeline
+- phase display for background TUI scans is updated by polling the log file every 250ms
 
 ## Legal
 

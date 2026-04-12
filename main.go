@@ -13,12 +13,22 @@ import (
 	"syscall"
 	"time"
 
-	"IluskaX/internal/auth"
 	"IluskaX/internal/core"
 	"IluskaX/internal/events"
 	"IluskaX/internal/modules"
 	"IluskaX/internal/ui"
 )
+
+type multiFlag []string
+
+func (m *multiFlag) String() string {
+	return strings.Join(*m, ", ")
+}
+
+func (m *multiFlag) Set(val string) error {
+	*m = append(*m, val)
+	return nil
+}
 
 func main() {
 	targetURL := flag.String("u", "", "Target URL to crawl")
@@ -32,8 +42,7 @@ func main() {
 	ignoreRobots := flag.Bool("ignore-robots", false, "Ignore robots.txt restrictions")
 	sqlmapLevel := flag.Int("sqlmap-level", 0, "SQLMap starting level (1-5), 0 = auto")
 	sqlmapRisk := flag.Int("sqlmap-risk", 0, "SQLMap starting risk (1-3), 0 = auto")
-	cookie := flag.String("cookie", "", "Cookie header for authenticated crawl and scanning")
-	cookieFile := flag.String("cookie-file", "", "Path to text file containing cookies for authenticated crawl and scanning")
+	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-5)")
@@ -41,6 +50,8 @@ func main() {
 	outFile := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
 	jsonOut := flag.String("json-out", "", "Output JSON report file path")
 	uiMode := flag.String("ui", "cli", "UI mode: cli|tui")
+	var headers multiFlag
+	flag.Var(&headers, "H", "Custom header in 'Name: Value' format (repeatable)")
 	flag.Parse()
 
 	if *targetURL == "" {
@@ -48,11 +59,7 @@ func main() {
 		return
 	}
 
-	resolvedCookie, err := auth.ResolveCookie(*cookie, *cookieFile)
-	if err != nil {
-		fmt.Printf("ERROR: Cannot read cookie input: %v\n", err)
-		return
-	}
+	modules.SetCustomHeaders(headers)
 
 	var skipList []string
 	if *skipFlag != "" {
@@ -115,6 +122,12 @@ func main() {
 	if *extRateLimit > 0 {
 		fmt.Printf("[*] EXTERNAL TOOL RATE LIMIT: %d req/s\n", *extRateLimit)
 	}
+	if len(headers) > 0 {
+		fmt.Printf("[*] CUSTOM HEADERS: %d set\n", len(headers))
+		for _, h := range headers {
+			fmt.Printf("    %s\n", h)
+		}
+	}
 	if len(skipList) > 0 {
 		fmt.Printf("[*] SKIPPING PATTERNS: %s\n", strings.Join(skipList, ", "))
 	}
@@ -124,14 +137,18 @@ func main() {
 	fmt.Println(sep)
 
 	if *subdomains {
-		modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"), *extRateLimit)
+		found := modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"), *extRateLimit)
+		if len(found) > 0 {
+			modules.HTTPXProbe(found, f, session.Writer("httpx"), *extRateLimit, sb)
+		}
 	}
 
 	sb.SetPhase("CRAWL", 0)
 	session.Start()
 
 	crawlerTerm := ui.NewStatusWriter(sb)
-	crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, parsed.Host, resolvedCookie)
+	crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, parsed.Host)
+	crawler.SetCustomHeaders(modules.CustomHeaders())
 	defer crawler.Stop()
 
 	if !*ignoreRobots {
@@ -224,6 +241,9 @@ func main() {
 			"-rate", fmt.Sprintf("%d", *rateLimit),
 			"-ext-rate", fmt.Sprintf("%d", *extRateLimit),
 		}
+		for _, h := range headers {
+			pentestArgs = append(pentestArgs, "-H", h)
+		}
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
 		}
@@ -235,9 +255,6 @@ func main() {
 		}
 		if *cookie != "" {
 			pentestArgs = append(pentestArgs, "-cookie", *cookie)
-		}
-		if *cookieFile != "" {
-			pentestArgs = append(pentestArgs, "-cookie-file", *cookieFile)
 		}
 		if *burpFile != "" {
 			pentestArgs = append(pentestArgs, "-burp", *burpFile)
@@ -272,17 +289,17 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-ext-rate <n>] [-c <n>] [-cookie <value>] [-cookie-file <path>] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
+	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
 	fmt.Println("  -rate          Requests per second (default: 10)")
 	fmt.Println("  -ext-rate      Requests per second for external tools (default: 0 = no limit)")
 	fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
 	fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 	fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
 	fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
-	fmt.Println("  -cookie        Cookie header for authenticated crawl and scanning")
-	fmt.Println("  -cookie-file   Text file containing cookies for authenticated crawl and scanning")
+	fmt.Println("  -cookie        Cookie for authenticated scanning")
 	fmt.Println("  -burp          Path to Burp request file for SQLMap")
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")
@@ -290,10 +307,11 @@ func printUsage() {
 	fmt.Println("  -ui            UI mode: cli|tui (default: cli)")
 	fmt.Println()
 	fmt.Println("Phases (for -skip-phase):")
-	fmt.Println("  0 = Subdomain Enumeration (subfinder)")
-	fmt.Println("  1 = Quick SQLi Test")
-	fmt.Println("  2 = NUCLEI Template Scan")
-	fmt.Println("  3 = SQLMap Deep Scan")
-	fmt.Println("  4 = Dalfox XSS Scan")
-	fmt.Println("  5 = Header & Cookie Analysis")
+	fmt.Println("  0  = Subdomain Enumeration (subfinder)")
+	fmt.Println("  0.1 = httpx probe (auto after phase 0)")
+	fmt.Println("  1  = Quick SQLi Test")
+	fmt.Println("  2  = NUCLEI Template Scan")
+	fmt.Println("  3  = SQLMap Deep Scan")
+	fmt.Println("  4  = Dalfox XSS Scan")
+	fmt.Println("  5  = Header & Cookie Analysis")
 }

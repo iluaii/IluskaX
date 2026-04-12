@@ -122,6 +122,16 @@ func IsStaticAsset(path string) bool {
 	return false
 }
 
+func ApplyHeaders(req *http.Request, cookie string) {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	for k, v := range customHeaders {
+		req.Header.Set(k, v)
+	}
+}
+
 func CollectCookieNames(urls []string, cookie string, client *http.Client, limiter <-chan time.Time) []string {
 	seen := map[string]bool{}
 	var names []string
@@ -133,10 +143,7 @@ func CollectCookieNames(urls []string, cookie string, client *http.Client, limit
 		if err != nil {
 			continue
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
-		if cookie != "" {
-			req.Header.Set("Cookie", cookie)
-		}
+		ApplyHeaders(req, cookie)
 		resp, err := client.Do(req)
 		if err != nil {
 			continue

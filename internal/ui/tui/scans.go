@@ -65,7 +65,7 @@ func (m *model) executeNewScanAction() {
 		target:     target,
 		flags:      flags,
 		status:     "running",
-		phase:      "external",
+		phase:      "starting",
 		startedAt:  item.createdAt,
 		lastEvent:  "Started from dashboard",
 		reportPath: logPath,
@@ -124,6 +124,99 @@ func launchBackgroundScan(target, flags string) (string, string, int, error) {
 	}()
 
 	return logPath, donePath, pid, nil
+}
+
+func parsePhaseFromLog(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := splitLines(string(data))
+	phase := ""
+	for _, line := range lines {
+		clean := stripANSI(strings.TrimSpace(line))
+		if !strings.Contains(clean, "[PHASE") {
+			continue
+		}
+		if strings.Contains(clean, "SKIPPED") {
+			continue
+		}
+		for _, marker := range []string{
+			"[PHASE 0.1]", "[PHASE 0]", "[PHASE 1]", "[PHASE 2]",
+			"[PHASE 3-POST]", "[PHASE 3.1]", "[PHASE 3]",
+			"[PHASE 4]", "[PHASE 5]",
+		} {
+			if strings.Contains(clean, marker) {
+				label := strings.TrimPrefix(marker, "[PHASE ")
+				label = strings.TrimSuffix(label, "]")
+				rest := strings.TrimSpace(strings.SplitN(clean, marker, 2)[1])
+				if idx := strings.Index(rest, " - "); idx != -1 {
+					rest = strings.TrimSpace(rest[:idx])
+				}
+				if idx := strings.Index(rest, "\n"); idx != -1 {
+					rest = rest[:idx]
+				}
+				rest = strings.TrimPrefix(rest, "- ")
+				name := shorten(rest, 20)
+				if name == "" {
+					name = "Phase " + label
+				}
+				phase = name
+				break
+			}
+		}
+	}
+	return phase
+}
+
+func parseProgressFromLog(path string) (scanned, total int64, percent int) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	lines := splitLines(string(data))
+	for i := len(lines) - 1; i >= 0; i-- {
+		clean := stripANSI(strings.TrimSpace(lines[i]))
+		if !strings.Contains(clean, "[") || !strings.Contains(clean, "/") {
+			continue
+		}
+		start := strings.Index(clean, "[")
+		end := strings.Index(clean, "]")
+		if start < 0 || end <= start {
+			continue
+		}
+		inner := clean[start+1 : end]
+		parts := strings.SplitN(inner, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		s := parseInt(strings.TrimSpace(parts[0]))
+		t := parseInt(strings.TrimSpace(parts[1]))
+		if s >= 0 && t > 0 {
+			scanned = int64(s)
+			total = int64(t)
+			percent = int((scanned * 100) / total)
+			return
+		}
+	}
+	return
+}
+
+func parseInt(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return -1
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 func (m *model) applyEvent(evt events.Event) {
@@ -347,7 +440,7 @@ func (m *model) restartSelectedScan() {
 		return
 	}
 	m.scans[idx].status = "running"
-	m.scans[idx].phase = "external"
+	m.scans[idx].phase = "starting"
 	m.scans[idx].startedAt = time.Now()
 	m.scans[idx].endedAt = time.Time{}
 	m.scans[idx].percent = 0
@@ -399,7 +492,7 @@ func (m model) selectedControllableScan() (scanEntry, int, bool) {
 		return scanEntry{}, -1, false
 	}
 	scan := m.scans[m.detailScan]
-	if scan.phase != "external" {
+	if scan.phase != "external" && scan.reportPath == "" {
 		return scanEntry{}, -1, false
 	}
 	return scan, m.detailScan, true
@@ -468,6 +561,19 @@ func (m *model) refreshExternalScans() {
 	for i := range m.scans {
 		scan := &m.scans[i]
 		m.syncExternalScanTargets(scan)
+
+		if scan.reportPath != "" && (scan.status == "running" || scan.status == "paused") {
+			if phase := parsePhaseFromLog(scan.reportPath); phase != "" {
+				scan.phase = phase
+			}
+			s, t, pct := parseProgressFromLog(scan.reportPath)
+			if t > 0 {
+				scan.scanned = s
+				scan.total = t
+				scan.percent = pct
+			}
+		}
+
 		if scan.donePath == "" || scan.status == "finished" || scan.status == "failed" || scan.status == "paused" {
 			continue
 		}

@@ -38,11 +38,7 @@ func SubdomainEnum(hostname string, crawlFile *os.File, term io.Writer, extRateL
 		return nil
 	}
 
-	fmt.Fprintf(term, "├─ Found %d subdomains:\n", len(found))
-	for _, sub := range found {
-		fmt.Fprintf(term, "│  ├─ %s\n", sub)
-		fmt.Fprintf(crawlFile, "https://%s/\n", sub)
-	}
-	fmt.Fprintln(term, "└─ Phase 0 complete, subdomains added to crawl file")
+	fmt.Fprintf(term, "├─ Found %d subdomains (will probe with httpx in phase 0.1)\n", len(found))
+	fmt.Fprintln(term, "└─ Phase 0 complete")
 	return found
 }

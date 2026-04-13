@@ -309,6 +309,7 @@ func printUsage() {
 	fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
 	fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
 	fmt.Println("  -cookie        Cookie for authenticated scanning")
+	fmt.Println("-cookiefile    Path to file with cookie header value (overrides -cookie)")
 	fmt.Println("  -burp          Path to Burp request file for SQLMap")
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")
@@ -323,5 +324,4 @@ func printUsage() {
 	fmt.Println("  3  = SQLMap Deep Scan")
 	fmt.Println("  4  = Dalfox XSS Scan")
 	fmt.Println("  5  = Header & Cookie Analysis")
-	fmt.Println("-cookiefile    Path to file with cookie header value (overrides -cookie)")
 }

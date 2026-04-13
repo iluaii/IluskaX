@@ -50,10 +50,19 @@ func main() {
 	outFile := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
 	jsonOut := flag.String("json-out", "", "Output JSON report file path")
 	uiMode := flag.String("ui", "cli", "UI mode: cli|tui")
+	cookieFile := flag.String("cookiefile", "", "Path to file containing cookie header value")
 	var headers multiFlag
 	flag.Var(&headers, "H", "Custom header in 'Name: Value' format (repeatable)")
 	flag.Parse()
 
+	if *cookieFile != "" {
+		data, err := os.ReadFile(*cookieFile)
+		if err != nil {
+			fmt.Printf("ERROR: Cannot read cookie file: %v\n", err)
+			return
+		}
+		*cookie = strings.TrimSpace(string(data))
+	}
 	if *targetURL == "" {
 		printUsage()
 		return
@@ -314,4 +323,5 @@ func printUsage() {
 	fmt.Println("  3  = SQLMap Deep Scan")
 	fmt.Println("  4  = Dalfox XSS Scan")
 	fmt.Println("  5  = Header & Cookie Analysis")
+	fmt.Println("-cookiefile    Path to file with cookie header value (overrides -cookie)")
 }

@@ -66,9 +66,6 @@ func printBanner() {
 	fmt.Println(colorYellow + "                   ║  web recon & pentest ║" + colorReset)
 	fmt.Println(colorYellow + "                   ╚══════════════════════╝" + colorReset)
 	fmt.Println()
-	fmt.Printf("%s  [INF]%s crawler · sqlmap · nuclei · dalfox · subfinder\n", colorCyan, colorDim+colorWhite+colorReset)
-	fmt.Printf("%s  [INF]%s version 1.0.0  ·  built with go\n", colorCyan, colorDim+colorWhite+colorReset)
-	fmt.Println()
 }
 func main() {
 	printBanner()

@@ -19,6 +19,23 @@ import (
 	"IluskaX/internal/ui"
 )
 
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[38;5;196m"
+	colorGreen  = "\033[38;5;46m"
+	colorYellow = "\033[38;5;226m"
+	colorBlue   = "\033[38;5;39m"
+	colorCyan   = "\033[38;5;51m"
+	colorWhite  = "\033[38;5;15m"
+	colorBold   = "\033[1m"
+	colorDim    = "\033[2m"
+
+	clearLine  = "\033[2K"
+	cursorUp   = "\033[1A"
+	cursorHome = "\r"
+	hideCursor = "\033[?25l"
+	showCursor = "\033[?25h"
+)
 type multiFlag []string
 
 func (m *multiFlag) String() string {
@@ -29,8 +46,32 @@ func (m *multiFlag) Set(val string) error {
 	*m = append(*m, val)
 	return nil
 }
+func printBanner() {
+	banner := []string{
+		"",
+		"  ██╗██╗     ██╗   ██╗███████╗██╗  ██╗ █████╗ ██╗  ██╗",
+		"  ██║██║     ██║   ██║██╔════╝██║ ██╔╝██╔══██╗╚██╗██╔╝",
+		"  ██║██║     ██║   ██║███████╗█████╔╝ ███████║ ╚███╔╝ ",
+		"  ██║██║     ██║   ██║╚════██║██╔═██╗ ██╔══██║ ██╔██╗ ",
+		"  ██║███████╗╚██████╔╝███████║██║  ██╗██║  ██║██╔╝ ██╗",
+		"  ╚═╝╚══════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+		"",
+	}
 
+	for _, line := range banner {
+		fmt.Println(colorGreen + line + colorReset)
+	}
+
+	fmt.Println(colorYellow + "                   ╔══════════════════════╗" + colorReset)
+	fmt.Println(colorYellow + "                   ║  web recon & pentest ║" + colorReset)
+	fmt.Println(colorYellow + "                   ╚══════════════════════╝" + colorReset)
+	fmt.Println()
+	fmt.Printf("%s  [INF]%s crawler · sqlmap · nuclei · dalfox · subfinder\n", colorCyan, colorDim+colorWhite+colorReset)
+	fmt.Printf("%s  [INF]%s version 1.0.0  ·  built with go\n", colorCyan, colorDim+colorWhite+colorReset)
+	fmt.Println()
+}
 func main() {
+	printBanner()
 	targetURL := flag.String("u", "", "Target URL to crawl")
 	recursive := flag.Bool("r", false, "Enable recursive crawling")
 	maxDepth := flag.Int("rd", 0, "Maximum recursion depth")

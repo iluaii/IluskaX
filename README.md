@@ -40,7 +40,7 @@ Core crawl logic is pure Go, but some pentest phases rely on external tools in `
 - `sqlmap` for SQL injection testing
 - `dalfox` for XSS testing
 
-If a tool is missing, only that phase will fail or be skipped.
+If a tool is missing, only the affected phase will fail or be skipped.
 
 ## Quick Start
 

@@ -36,6 +36,7 @@ const (
 	hideCursor = "\033[?25l"
 	showCursor = "\033[?25h"
 )
+
 type multiFlag []string
 
 func (m *multiFlag) String() string {
@@ -74,6 +75,7 @@ func main() {
 	maxDepth := flag.Int("rd", 0, "Maximum recursion depth")
 	pentest := flag.Bool("ps", false, "Run pentest scan after crawl")
 	subdomains := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
+	pentestSubdomains := flag.Bool("ps-subdomains", false, "Crawl validated subdomains too so pentest covers them")
 	rateLimit := flag.Int("rate", 10, "Requests per second")
 	extRateLimit := flag.Int("ext-rate", 0, "Requests per second for external tools (0 = no limit)")
 	concurrency := flag.Int("c", 5, "Max concurrent goroutines")
@@ -183,25 +185,12 @@ func main() {
 	}
 	fmt.Println(sep)
 
+	var aliveSubdomains []string
 	if *subdomains {
 		found := modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"), *extRateLimit)
 		if len(found) > 0 {
-			modules.HTTPXProbe(found, f, session.Writer("httpx"), *extRateLimit, sb)
+			aliveSubdomains = modules.HTTPXProbe(found, f, session.Writer("httpx"), *extRateLimit, sb)
 		}
-	}
-
-	sb.SetPhase("CRAWL", 0)
-	session.Start()
-
-	crawlerTerm := ui.NewStatusWriter(sb)
-	crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, parsed.Host)
-	crawler.SetCustomHeaders(modules.CustomHeaders())
-	defer crawler.Stop()
-
-	if !*ignoreRobots {
-		crawler.FetchRobots(parsed)
-	} else {
-		fmt.Println("[*] robots.txt ignored")
 	}
 
 	var baseCtx context.Context
@@ -215,15 +204,59 @@ func main() {
 	ctx, stopSignals := signal.NotifyContext(baseCtx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
-	sem := make(chan struct{}, *concurrency)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	sem <- struct{}{}
-	go crawler.Pars(ctx, *targetURL, *recursive, 0, *maxDepth, skipList, &wg, sem, rc, sb)
-	wg.Wait()
+	sb.SetPhase("CRAWL", 0)
+	session.Start()
 
-	crawler.ScanJS(crawlerTerm, f, rc, sb)
-	f.Sync()
+	if *ignoreRobots {
+		fmt.Println("[*] robots.txt ignored")
+	}
+
+	runCrawl := func(seedURL, scopeHost string) {
+		crawlerTerm := ui.NewStatusWriter(sb)
+		crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, scopeHost)
+		crawler.SetCustomHeaders(modules.CustomHeaders())
+		defer crawler.Stop()
+
+		if !*ignoreRobots {
+			if seedParsed, err := url.Parse(seedURL); err == nil {
+				crawler.FetchRobots(seedParsed)
+			}
+		}
+
+		sem := make(chan struct{}, *concurrency)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		sem <- struct{}{}
+		go crawler.Pars(ctx, seedURL, *recursive, 0, *maxDepth, skipList, &wg, sem, rc, sb)
+		wg.Wait()
+
+		crawler.ScanJS(crawlerTerm, f, rc, sb)
+		f.Sync()
+	}
+
+	runCrawl(*targetURL, parsed.Host)
+
+	if *pentestSubdomains && len(aliveSubdomains) > 0 {
+		fmt.Printf("[*] Subdomain pentest enrichment enabled: crawling %d validated subdomains\n", len(aliveSubdomains))
+		seenHosts := map[string]bool{
+			parsed.Hostname(): true,
+		}
+		for _, subURL := range aliveSubdomains {
+			subParsed, err := url.Parse(subURL)
+			if err != nil || subParsed.Host == "" {
+				fmt.Printf("[WARN] Skipping invalid subdomain URL: %s\n", subURL)
+				continue
+			}
+			if seenHosts[subParsed.Hostname()] {
+				continue
+			}
+			seenHosts[subParsed.Hostname()] = true
+			fmt.Printf("[*] Crawling validated subdomain: %s\n", subURL)
+			runCrawl(subURL, subParsed.Host)
+		}
+	} else if *pentestSubdomains && !*subdomains {
+		fmt.Println("[WARN] -ps-subdomains requires -sd; flag ignored")
+	}
 
 	var completionSummary strings.Builder
 	completionSummary.WriteString("\n" + sep + "\n")
@@ -336,13 +369,14 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
 	fmt.Println("  -rate          Requests per second (default: 10)")
 	fmt.Println("  -ext-rate      Requests per second for external tools (default: 0 = no limit)")
 	fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
+	fmt.Println("  -ps-subdomains Crawl validated subdomains too so pentest covers them")
 	fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 	fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
 	fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")

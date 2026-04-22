@@ -104,6 +104,12 @@ If a tool is missing, only the affected phase will fail or be skipped.
 ./luska -u https://example.com -sd -ps
 ```
 
+### Crawl validated subdomains too before pentest
+
+```bash
+./luska -u https://example.com -sd -ps -ps-subdomains
+```
+
 Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI mode and only the child `pentest` process uses the TUI.
 
 ## `luska` Flags
@@ -116,6 +122,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-rd` | `0` | Maximum recursion depth |
 | `-ps` | `false` | Run pentest after crawl |
 | `-sd` | `false` | Run subdomain enumeration before crawl |
+| `-ps-subdomains` | `false` | Crawl validated subdomains too so pentest covers them |
 | `-rate` | `10` | Requests per second for built-in crawl and pentest HTTP probes |
 | `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
 | `-c` | `5` | Max concurrent goroutines |
@@ -251,6 +258,8 @@ If `-ext-rate` is set, it is forwarded to `subfinder`.
 Runs `httpx` (at `~/go/bin/httpx`) against the subdomains found in phase 0. Only subdomains that respond with a valid HTTP response are written to the crawl file and added to the scan scope.
 
 If `-ext-rate` is set, it is forwarded to `httpx`.
+
+If `-ps-subdomains` is enabled, these validated subdomains are also crawled as separate in-scope targets before the final pentest starts. This gives later pentest phases more than just the root URL for each live subdomain.
 
 ### Phase 1: Quick SQLi Test
 
@@ -447,4 +456,3 @@ You must not use this project to scan, probe, attack, stress, disrupt, or enumer
 The authors do not authorize illegal use of this software. The fact that this repository is public does not grant permission to test third-party targets.
 
 By using IluskaX, you are solely responsible for ensuring that your activity complies with all applicable laws, platform rules, contracts, and program policies.
-

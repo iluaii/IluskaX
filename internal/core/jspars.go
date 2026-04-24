@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -15,6 +16,12 @@ type JSEndpoint struct {
 	URL    string
 	Params []string
 	Source string
+}
+
+type JSSignature struct {
+	Name    string
+	Source  string
+	Snippet string
 }
 
 var (
@@ -28,6 +35,21 @@ var (
 
 	jsSkipExts = []string{".png", ".jpg", ".gif", ".svg", ".css", ".woff", ".ico", "data:"}
 )
+
+var jsSignaturePatterns = []struct {
+	name string
+	re   *regexp.Regexp
+}{
+	{name: "api key", re: regexp.MustCompile(`(?i)(?:api[_-]?key|apikey)\s*[:=]\s*["'\x60][^"'\x60]{6,}["'\x60]`)},
+	{name: "access token", re: regexp.MustCompile(`(?i)(?:access[_-]?token|auth[_-]?token|token)\s*[:=]\s*["'\x60][^"'\x60]{8,}["'\x60]`)},
+	{name: "client secret", re: regexp.MustCompile(`(?i)(?:client[_-]?secret|app[_-]?secret)\s*[:=]\s*["'\x60][^"'\x60]{6,}["'\x60]`)},
+	{name: "secret", re: regexp.MustCompile(`(?i)\bsecret\b\s*[:=]\s*["'\x60][^"'\x60]{6,}["'\x60]`)},
+	{name: "password", re: regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*["'\x60][^"'\x60]{4,}["'\x60]`)},
+	{name: "bearer token", re: regexp.MustCompile(`(?i)bearer\s+[a-z0-9\-_\.=]{10,}`)},
+	{name: "authorization header", re: regexp.MustCompile(`(?i)authorization\s*[:=]\s*["'\x60][^"'\x60]{8,}["'\x60]`)},
+	{name: "private key marker", re: regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+	{name: "webhook url", re: regexp.MustCompile(`(?i)https://hooks\.(?:slack|zapier)\.com/[^\s"'` + "\x60" + `]+`)},
+}
 
 func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector, sb *ui.StatusBar) {
 	logf := func(format string, args ...interface{}) {
@@ -126,43 +148,91 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 	}
 
 	allEndpoints := map[string]JSEndpoint{}
+	allSignatures := map[string]JSSignature{}
 	for _, js := range jsSources {
 		base, _ := url.Parse(js.pageURL)
 		for _, ep := range parseJSBody(js.body, js.srcURL, base) {
 			allEndpoints[ep.URL] = ep
 		}
+		for _, sig := range findJSSignatures(js.body, js.srcURL) {
+			key := sig.Name + "|" + sig.Source + "|" + sig.Snippet
+			allSignatures[key] = sig
+		}
 	}
 
-	if len(allEndpoints) == 0 {
-		logf("%s\n", "└─ No endpoints found in JS")
+	if len(allEndpoints) == 0 && len(allSignatures) == 0 {
+		logf("%s\n", "└─ No endpoints or signatures found in JS")
 		return
 	}
 
-	logf("├─ Endpoints found: %d\n", len(allEndpoints))
-	logf("%s\n", "│")
-	logf("│  %-70s %-14s %s\n", "ENDPOINT", "SOURCE", "PARAMS")
-	logf("│  %s\n", strings.Repeat("─", 100))
+	if len(allEndpoints) > 0 {
+		logf("├─ Endpoints found: %d\n", len(allEndpoints))
+		logf("%s\n", "│")
+		logf("│  %-70s %-14s %s\n", "ENDPOINT", "SOURCE", "PARAMS")
+		logf("│  %s\n", strings.Repeat("─", 100))
 
-	for _, ep := range allEndpoints {
-		params := "-"
-		if len(ep.Params) > 0 {
-			params = strings.Join(ep.Params, ", ")
+		endpoints := make([]JSEndpoint, 0, len(allEndpoints))
+		for _, ep := range allEndpoints {
+			endpoints = append(endpoints, ep)
 		}
-		displayURL := ui.Truncate(ep.URL, 70)
-		logf("│  %-70s %-14s %s\n", displayURL, ep.Source, ui.Truncate(params, 40))
-		fmt.Fprintln(file, ep.URL)
-		if rc != nil {
-			rc.AddSitemapURL(ep.URL)
-		}
-		if len(ep.Params) > 0 && !strings.Contains(ep.URL, "?") {
-			parts := make([]string, len(ep.Params))
-			for i, p := range ep.Params {
-				parts[i] = p + "=1"
+		sort.Slice(endpoints, func(i, j int) bool {
+			return endpoints[i].URL < endpoints[j].URL
+		})
+
+		for _, ep := range endpoints {
+			params := "-"
+			if len(ep.Params) > 0 {
+				params = strings.Join(ep.Params, ", ")
 			}
-			withParams := ep.URL + "?" + strings.Join(parts, "&")
-			fmt.Fprintln(file, withParams)
+			displayURL := ui.Truncate(ep.URL, 70)
+			logf("│  %-70s %-14s %s\n", displayURL, ep.Source, ui.Truncate(params, 40))
+			fmt.Fprintln(file, ep.URL)
 			if rc != nil {
-				rc.AddSitemapURL(withParams)
+				rc.AddSitemapURL(ep.URL)
+			}
+			if len(ep.Params) > 0 && !strings.Contains(ep.URL, "?") {
+				parts := make([]string, len(ep.Params))
+				for i, p := range ep.Params {
+					parts[i] = p + "=1"
+				}
+				withParams := ep.URL + "?" + strings.Join(parts, "&")
+				fmt.Fprintln(file, withParams)
+				if rc != nil {
+					rc.AddSitemapURL(withParams)
+				}
+			}
+		}
+	}
+
+	if len(allSignatures) > 0 {
+		signatures := make([]JSSignature, 0, len(allSignatures))
+		for _, sig := range allSignatures {
+			signatures = append(signatures, sig)
+		}
+		sort.Slice(signatures, func(i, j int) bool {
+			if signatures[i].Name == signatures[j].Name {
+				if signatures[i].Source == signatures[j].Source {
+					return signatures[i].Snippet < signatures[j].Snippet
+				}
+				return signatures[i].Source < signatures[j].Source
+			}
+			return signatures[i].Name < signatures[j].Name
+		})
+
+		logf("├─ JS signatures found: %d\n", len(signatures))
+		logf("%s\n", "│")
+		logf("│  %-18s %-18s %s\n", "SIGNATURE", "SOURCE", "SNIPPET")
+		logf("│  %s\n", strings.Repeat("─", 100))
+		for _, sig := range signatures {
+			logf("│  %-18s %-18s %s\n", ui.Truncate(sig.Name, 18), ui.Truncate(sig.Source, 18), ui.Truncate(sig.Snippet, 60))
+			if rc != nil {
+				rc.AddFinding(ui.Finding{
+					Type:    ui.VulnJS,
+					Level:   ui.LevelWarning,
+					URL:     sig.Source,
+					Payload: sig.Name,
+					Detail:  sig.Snippet,
+				})
 			}
 		}
 	}
@@ -267,4 +337,34 @@ func extractParams(path string) []string {
 		}
 	}
 	return params
+}
+
+func findJSSignatures(body, sourceURL string) []JSSignature {
+	seen := map[string]bool{}
+	out := make([]JSSignature, 0, 8)
+
+	for _, sig := range jsSignaturePatterns {
+		matches := sig.re.FindAllString(body, -1)
+		for _, match := range matches {
+			snippet := normalizeJSSnippet(match)
+			key := sig.name + "|" + sourceURL + "|" + snippet
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, JSSignature{
+				Name:    sig.name,
+				Source:  sourceURL,
+				Snippet: snippet,
+			})
+		}
+	}
+
+	return out
+}
+
+func normalizeJSSnippet(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	return ui.Truncate(s, 120)
 }

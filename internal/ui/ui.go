@@ -97,6 +97,7 @@ const (
 	VulnHeader
 	VulnCookie
 	VulnNuclei
+	VulnJS
 )
 
 func (v VulnType) String() string {
@@ -111,6 +112,8 @@ func (v VulnType) String() string {
 		return "Cookie"
 	case VulnNuclei:
 		return "Nuclei"
+	case VulnJS:
+		return "JS"
 	}
 	return "Unknown"
 }
@@ -153,6 +156,8 @@ func (v VulnType) SectionTitle(count int) string {
 		return fmt.Sprintf(" ◈ %s FINDINGS (%d found) ", v.String(), count)
 	case VulnCookie:
 		return fmt.Sprintf(" ◈ %s ISSUES (%d found) ", v.String(), count)
+	case VulnJS:
+		return fmt.Sprintf(" ◈ %s SIGNATURES (%d found) ", v.String(), count)
 	default:
 		return fmt.Sprintf(" ◈ %s VULNERABILITIES (%d found) ", v.String(), count)
 	}
@@ -164,6 +169,8 @@ func (v VulnType) SummaryLabel() string {
 		return "Header findings"
 	case VulnCookie:
 		return "Cookie issues"
+	case VulnJS:
+		return "JS signatures"
 	default:
 		return v.String()
 	}
@@ -177,6 +184,8 @@ func (v VulnType) titleColor() string {
 		return colorYellow + colorBold
 	case VulnHeader, VulnCookie:
 		return colorYellow + colorBold
+	case VulnJS:
+		return colorYellow + colorBold
 	}
 	return colorWhite
 }
@@ -189,6 +198,8 @@ func (v VulnType) rowColor() string {
 		return colorYellow
 	case VulnHeader, VulnCookie:
 		return colorDim
+	case VulnJS:
+		return colorYellow
 	}
 	return colorWhite
 }
@@ -201,6 +212,8 @@ func (v VulnType) borderColor() string {
 		return colorYellow
 	case VulnHeader, VulnCookie:
 		return colorCyan
+	case VulnJS:
+		return colorYellow
 	}
 	return colorWhite
 }
@@ -461,7 +474,7 @@ func PrintFindingsTable(findings []Finding, toTerm bool) string {
 	}
 	var out strings.Builder
 	wroteSection := false
-	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnHeader, VulnCookie} {
+	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnHeader, VulnCookie, VulnJS} {
 		fs, ok := byType[vt]
 		if !ok {
 			continue
@@ -586,7 +599,7 @@ func renderTable(vt VulnType, findings []Finding, toTerm bool) string {
 		pCell := padRight(pStr, colPayload)
 
 		rowColor := rc
-		if toTerm && (vt == VulnHeader || vt == VulnCookie) {
+		if toTerm && (vt == VulnHeader || vt == VulnCookie || vt == VulnJS) {
 			rowColor = f.Level.color()
 		}
 
@@ -640,7 +653,7 @@ func PrintSummary(findings []Finding, startTime time.Time, toTerm bool) string {
 	vulnTotal := 0
 	warningTotal := 0
 	infoTotal := 0
-	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnHeader, VulnCookie} {
+	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnHeader, VulnCookie, VulnJS} {
 		if n := counts[vt]; n > 0 {
 			total += n
 			label := fmt.Sprintf("  %-16s : %d", vt.SummaryLabel(), n)

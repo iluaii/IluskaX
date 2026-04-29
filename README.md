@@ -136,6 +136,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-timeout` | `0` | Total crawl timeout in minutes, `0 = no limit` |
 | `-o` | empty | Output report path |
 | `-json-out` | empty | Output JSON report path |
+| `-graphql-schema-dir` | `Poutput/graphql` | Directory for GraphQL schema artifacts |
+| `-graphql-schema-out` | empty | Single JSON file for GraphQL schema artifacts |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## `pentest` Flags
@@ -155,6 +157,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
 | `-o` | empty | Export final report to a custom path |
 | `-json-out` | empty | Export final report to JSON |
+| `-graphql-schema-dir` | `Poutput/graphql` | Directory for GraphQL schema artifacts |
+| `-graphql-schema-out` | empty | Single JSON file for GraphQL schema artifacts |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## Custom Headers
@@ -200,6 +204,29 @@ External tool rate limiting is applied to:
 - `nuclei`
 - `sqlmap`
 - `dalfox`
+
+## GraphQL Scan
+
+Pentest phase `6` performs safe GraphQL checks:
+
+- endpoint discovery from crawled URLs plus common paths such as `/graphql`, `/api/graphql`, `/query`, and `/gql`
+- safe probing of crawled non-static endpoints because GraphQL is not always hosted on a path named `/graphql`
+- `POST` / `GET` transport probing with `__typename`
+- introspection detection and schema summary for queries, mutations, subscriptions, and types
+- JSON batching detection
+- verbose validation error detection
+
+Schema artifacts are written to `Poutput/graphql` by default and are not printed into the terminal. To write all detected GraphQL schemas into one file:
+
+```bash
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -graphql-schema-out Poutput/graphql/example-schema.json
+```
+
+Mutations are never executed by this phase. To skip it:
+
+```bash
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -skip-phase 6
+```
 
 Example:
 
@@ -304,6 +331,14 @@ Important:
 - missing headers are treated as recommendations or informational findings
 - real header or cookie misconfigurations are shown separately from confirmed vulnerabilities
 
+### Phase 6: GraphQL
+
+Safely discovers GraphQL endpoints, checks whether `POST` or `GET` queries are accepted, detects enabled introspection, summarizes exposed schema operations, and checks for JSON batching and verbose validation errors.
+
+This phase also probes crawled non-static endpoints, because GraphQL can live behind paths such as `/api`, `/gateway`, or `/v1`. Schema artifacts are saved to `Poutput/graphql` by default, or to `-graphql-schema-out` when a single custom JSON file is requested.
+
+This phase does not execute mutations and does not print the schema body to the terminal.
+
 ## Reports
 
 Default files:
@@ -312,6 +347,7 @@ Default files:
 output/<hostname>|<datetime>.txt
 Poutput/<hostname>|<datetime>_report.txt
 Poutput/sqlmap/
+Poutput/graphql/
 ```
 
 If `-o` is provided, IluskaX also writes a custom export file with:
@@ -435,8 +471,9 @@ Phase mapping:
 - `3` = SQLMap
 - `4` = dalfox
 - `5` = header and cookie analysis
+- `6` = GraphQL endpoint and schema scan
 
-For direct `pentest`, supported skip values are `1` through `5`.
+For direct `pentest`, supported skip values are `1` through `6`.
 
 ## Notes
 

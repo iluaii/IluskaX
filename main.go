@@ -85,10 +85,12 @@ func main() {
 	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
-	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-5)")
+	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-6)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
 	outFile := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
 	jsonOut := flag.String("json-out", "", "Output JSON report file path")
+	graphqlSchemaDir := flag.String("graphql-schema-dir", "Poutput/graphql", "Directory for GraphQL schema artifacts")
+	graphqlSchemaOut := flag.String("graphql-schema-out", "", "Single JSON file for GraphQL schema artifacts")
 	uiMode := flag.String("ui", "cli", "UI mode: cli|tui")
 	cookieFile := flag.String("cookiefile", "", "Path to file containing cookie header value")
 	var headers multiFlag
@@ -345,6 +347,12 @@ func main() {
 		if *jsonOut != "" {
 			pentestArgs = append(pentestArgs, "-json-out", *jsonOut)
 		}
+		if *graphqlSchemaDir != "" {
+			pentestArgs = append(pentestArgs, "-graphql-schema-dir", *graphqlSchemaDir)
+		}
+		if *graphqlSchemaOut != "" {
+			pentestArgs = append(pentestArgs, "-graphql-schema-out", *graphqlSchemaOut)
+		}
 		if mode == ui.ModeTUI {
 			pentestArgs = append(pentestArgs, "-ui", "tui")
 		}
@@ -386,6 +394,8 @@ func printUsage() {
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")
 	fmt.Println("  -json-out      Output JSON report file")
+	fmt.Println("  -graphql-schema-dir Directory for GraphQL schema artifacts")
+	fmt.Println("  -graphql-schema-out Single JSON file for GraphQL schema artifacts")
 	fmt.Println("  -ui            UI mode: cli|tui (default: cli)")
 	fmt.Println()
 	fmt.Println("Phases (for -skip-phase):")
@@ -396,4 +406,5 @@ func printUsage() {
 	fmt.Println("  3  = SQLMap Deep Scan")
 	fmt.Println("  4  = Dalfox XSS Scan")
 	fmt.Println("  5  = Header & Cookie Analysis")
+	fmt.Println("  6  = GraphQL Endpoint & Schema Scan")
 }

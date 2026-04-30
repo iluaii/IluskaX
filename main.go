@@ -94,7 +94,9 @@ func main() {
 	uiMode := flag.String("ui", "cli", "UI mode: cli|tui")
 	cookieFile := flag.String("cookiefile", "", "Path to file containing cookie header value")
 	var headers multiFlag
+	var graphqlEndpoints multiFlag
 	flag.Var(&headers, "H", "Custom header in 'Name: Value' format (repeatable)")
+	flag.Var(&graphqlEndpoints, "graphql-endpoint", "Manual GraphQL endpoint URL or path (repeatable, e.g. /graphql/v1)")
 	flag.Parse()
 
 	if *cookieFile != "" {
@@ -218,6 +220,7 @@ func main() {
 		crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, scopeHost)
 		crawler.SetCustomHeaders(modules.CustomHeaders())
 		defer crawler.Stop()
+		crawler.WriteLine(seedURL)
 
 		if !*ignoreRobots {
 			if seedParsed, err := url.Parse(seedURL); err == nil {
@@ -353,6 +356,10 @@ func main() {
 		if *graphqlSchemaOut != "" {
 			pentestArgs = append(pentestArgs, "-graphql-schema-out", *graphqlSchemaOut)
 		}
+		pentestArgs = append(pentestArgs, "-graphql-base-url", *targetURL)
+		for _, endpoint := range graphqlEndpoints {
+			pentestArgs = append(pentestArgs, "-graphql-endpoint", endpoint)
+		}
 		if mode == ui.ModeTUI {
 			pentestArgs = append(pentestArgs, "-ui", "tui")
 		}
@@ -377,7 +384,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
@@ -396,6 +403,7 @@ func printUsage() {
 	fmt.Println("  -json-out      Output JSON report file")
 	fmt.Println("  -graphql-schema-dir Directory for GraphQL schema artifacts")
 	fmt.Println("  -graphql-schema-out Single JSON file for GraphQL schema artifacts")
+	fmt.Println("  -graphql-endpoint Manual GraphQL endpoint URL or path (repeatable, e.g. /graphql/v1)")
 	fmt.Println("  -ui            UI mode: cli|tui (default: cli)")
 	fmt.Println()
 	fmt.Println("Phases (for -skip-phase):")

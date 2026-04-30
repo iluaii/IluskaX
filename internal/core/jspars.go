@@ -29,9 +29,12 @@ var (
 	reFetchQuoted = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*[\"']([^\"'`]+)[\"']")
 	reFetchTmpl   = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*`([^`]+)`")
 	reXHR         = regexp.MustCompile(`\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["']([^"']+)["']`)
+	reAxiosConfig = regexp.MustCompile(`(?is)axios\s*\(\s*\{.{0,900}?url\s*:\s*["']([^"']+)["']`)
+	reAjaxConfig  = regexp.MustCompile(`(?is)\$\.ajax\s*\(\s*\{.{0,900}?url\s*:\s*["']([^"']+)["']`)
+	reJQueryGet   = regexp.MustCompile(`\$\.(?:get|getJSON)\s*\(\s*["']([^"']+)["']`)
 	reParam       = regexp.MustCompile(`[?&]([a-zA-Z_][a-zA-Z0-9_]*)=`)
 	reTemplateVar = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
-	reAPIVar      = regexp.MustCompile(`(?:apiUrl|endpoint|baseURL|apiPath|path)\s*=\s*["']([^"']+)["']`)
+	reAPIVar      = regexp.MustCompile(`(?i)(?:apiUrl|api_url|endpoint|baseURL|base_url|apiPath|api_path|path)\s*=\s*["']([^"']+)["']`)
 
 	jsSkipExts = []string{".png", ".jpg", ".gif", ".svg", ".css", ".woff", ".ico", "data:"}
 )
@@ -316,6 +319,15 @@ func parseJSBody(body, sourceURL string, base *url.URL) []JSEndpoint {
 	}
 	for _, m := range reXHR.FindAllStringSubmatch(body, -1) {
 		add(m[1], "XHR")
+	}
+	for _, m := range reAxiosConfig.FindAllStringSubmatch(body, -1) {
+		add(m[1], "axios/config")
+	}
+	for _, m := range reAjaxConfig.FindAllStringSubmatch(body, -1) {
+		add(m[1], "ajax/config")
+	}
+	for _, m := range reJQueryGet.FindAllStringSubmatch(body, -1) {
+		add(m[1], "jquery/get")
 	}
 	for _, m := range reStrPath.FindAllStringSubmatch(body, -1) {
 		add(m[1], "string")

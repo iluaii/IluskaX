@@ -33,6 +33,17 @@ const graphqlIntrospectionQuery = `query IluskaXIntrospection {
   }
 }`
 
+const graphqlCompactIntrospectionQuery = `query IluskaXIntrospection{schema:__schema{queryType{name}mutationType{name}subscriptionType{name}types{kind name fields(includeDeprecated:true){name args{name type{kind name ofType{kind name ofType{kind name}}}}type{kind name ofType{kind name ofType{kind name}}}}}}}`
+
+var graphqlIntrospectionBypassTokens = []struct {
+	name  string
+	token string
+}{
+	{name: "newline after __schema", token: "__schema\n"},
+	{name: "comma after __schema", token: "__schema,"},
+	{name: "comment after __schema", token: "__schema # IluskaX\n"},
+}
+
 type graphqlRequest struct {
 	Query string `json:"query"`
 }
@@ -46,7 +57,8 @@ type graphqlResponse struct {
 
 type graphqlSchemaResponse struct {
 	Data struct {
-		Schema graphqlSchema `json:"__schema"`
+		Schema      graphqlSchema `json:"__schema"`
+		SchemaAlias graphqlSchema `json:"schema"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -91,6 +103,8 @@ type graphqlEndpointResult struct {
 	URL                  string
 	SupportsPOST         bool
 	SupportsGET          bool
+	ProbeTransport       string
+	IntrospectionProbe   string
 	IntrospectionEnabled bool
 	BatchingEnabled      bool
 	VerboseErrors        bool
@@ -100,11 +114,14 @@ type graphqlEndpointResult struct {
 type GraphQLScanOptions struct {
 	SchemaDir  string
 	SchemaFile string
+	BaseURL    string
+	Endpoints  []string
 }
 
 type graphqlSchemaArtifact struct {
 	Endpoint              string   `json:"endpoint"`
 	Transport             string   `json:"transport"`
+	IntrospectionProbe    string   `json:"introspection_probe,omitempty"`
 	IntrospectionEnabled  bool     `json:"introspection_enabled"`
 	BatchingEnabled       bool     `json:"batching_enabled"`
 	VerboseErrors         bool     `json:"verbose_errors"`
@@ -120,7 +137,7 @@ func GraphQLScan(urls []string, w io.Writer, cookie string, limiter <-chan time.
 		opts.SchemaDir = filepath.Join("Poutput", "graphql")
 	}
 
-	candidates := graphqlCandidates(urls)
+	candidates := graphqlCandidates(graphqlScanInputs(urls, opts))
 	if len(candidates) == 0 {
 		fmt.Fprintln(w, "└─ No GraphQL endpoint candidates found")
 		return
@@ -155,17 +172,19 @@ func GraphQLScan(urls []string, w io.Writer, cookie string, limiter <-chan time.
 		if limiter != nil {
 			<-limiter
 		}
-		result.IntrospectionEnabled, result.Schema, result.VerboseErrors = probeGraphQLIntrospection(client, endpoint, cookie)
+		result.IntrospectionEnabled, result.Schema, result.VerboseErrors, result.IntrospectionProbe = probeGraphQLIntrospection(client, result, cookie)
 
 		if limiter != nil {
 			<-limiter
 		}
-		result.VerboseErrors = result.VerboseErrors || probeGraphQLVerboseErrors(client, endpoint, cookie)
+		result.VerboseErrors = result.VerboseErrors || probeGraphQLVerboseErrors(client, result, cookie)
 
-		if limiter != nil {
-			<-limiter
+		if result.SupportsPOST {
+			if limiter != nil {
+				<-limiter
+			}
+			result.BatchingEnabled = probeGraphQLBatching(client, endpoint, cookie)
 		}
-		result.BatchingEnabled = probeGraphQLBatching(client, endpoint, cookie)
 
 		found = append(found, result)
 		recordGraphQLFindings(result, rc)
@@ -191,6 +210,60 @@ func GraphQLScan(urls []string, w io.Writer, cookie string, limiter <-chan time.
 		}
 	}
 	fmt.Fprintln(w, "└─ GraphQL scan complete")
+}
+
+func graphqlScanInputs(urls []string, opts GraphQLScanOptions) []string {
+	inputs := append([]string{}, urls...)
+	baseURLs := graphqlBaseURLs(opts.BaseURL, urls)
+	for _, endpoint := range opts.Endpoints {
+		endpoint = strings.TrimSpace(endpoint)
+		if endpoint == "" {
+			continue
+		}
+		parsed, err := url.Parse(endpoint)
+		if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			inputs = append(inputs, parsed.String())
+			continue
+		}
+		for _, base := range baseURLs {
+			ref, err := url.Parse(endpoint)
+			if err != nil {
+				continue
+			}
+			inputs = append(inputs, base.ResolveReference(ref).String())
+		}
+	}
+	if len(inputs) == 0 {
+		for _, base := range baseURLs {
+			inputs = append(inputs, base.String())
+		}
+	}
+	return inputs
+}
+
+func graphqlBaseURLs(baseURL string, urls []string) []*url.URL {
+	seen := map[string]bool{}
+	var bases []*url.URL
+	add := func(raw string) {
+		parsed, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return
+		}
+		parsed.Path = "/"
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		key := parsed.Scheme + "://" + parsed.Host
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		bases = append(bases, parsed)
+	}
+	add(baseURL)
+	for _, raw := range urls {
+		add(raw)
+	}
+	return bases
 }
 
 func graphqlCandidates(urls []string) []string {
@@ -231,9 +304,13 @@ func graphqlCandidates(urls []string) []string {
 		case strings.HasSuffix(cleanPath, "/gql") || strings.HasSuffix(cleanPath, "/query"):
 			add(raw)
 		}
+
+		for _, apiCandidate := range graphqlAPIPrefixCandidates(parsed) {
+			add(apiCandidate)
+		}
 	}
 
-	commonPaths := []string{"/graphql", "/api/graphql", "/v1/graphql", "/query", "/gql"}
+	commonPaths := []string{"/graphql", "/graphql/v1", "/api", "/api/graphql", "/api/graphql/v1", "/api/query", "/api/v1/graphql", "/v1", "/v1/graphql", "/query", "/gql", "/gateway"}
 	for _, base := range hosts {
 		for _, p := range commonPaths {
 			candidate := *base
@@ -250,51 +327,192 @@ func graphqlCandidates(urls []string) []string {
 	return out
 }
 
+func graphqlAPIPrefixCandidates(parsed *url.URL) []string {
+	if parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	var candidates []string
+	for i, part := range parts {
+		lower := strings.ToLower(part)
+		if lower != "api" && lower != "graphql" && lower != "gql" && lower != "gateway" && lower != "query" && !isVersionPathSegment(lower) {
+			continue
+		}
+		for end := i + 1; end <= len(parts) && end <= i+2; end++ {
+			candidate := *parsed
+			candidate.Path = "/" + strings.Join(parts[:end], "/")
+			candidate.RawQuery = ""
+			candidate.Fragment = ""
+			candidates = append(candidates, candidate.String())
+		}
+	}
+	return candidates
+}
+
+func isVersionPathSegment(segment string) bool {
+	if len(segment) < 2 || segment[0] != 'v' {
+		return false
+	}
+	for _, r := range segment[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func probeGraphQLEndpoint(client *http.Client, endpoint, cookie string) (graphqlEndpointResult, bool) {
 	result := graphqlEndpointResult{URL: endpoint}
 	body, status, err := doGraphQLPost(client, endpoint, cookie, graphqlRequest{Query: "query IluskaXProbe { __typename }"})
 	if err == nil && status < 500 && looksLikeGraphQL(body) {
 		result.SupportsPOST = true
+		result.ProbeTransport = "POST"
 	}
 
-	getURL, err := url.Parse(endpoint)
-	if err == nil {
-		q := getURL.Query()
-		q.Set("query", "query IluskaXProbe { __typename }")
-		getURL.RawQuery = q.Encode()
-		req, reqErr := http.NewRequest("GET", getURL.String(), nil)
-		if reqErr == nil {
-			ApplyHeaders(req, cookie)
-			resp, doErr := client.Do(req)
-			if doErr == nil {
-				data, readErr := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-				resp.Body.Close()
-				if readErr == nil && resp.StatusCode < 500 && looksLikeGraphQL(data) {
-					result.SupportsGET = true
-				}
-			}
+	body, status, err = doGraphQLPostForm(client, endpoint, cookie, "query IluskaXProbe { __typename }")
+	if err == nil && status < 500 && looksLikeGraphQL(body) {
+		result.SupportsPOST = true
+		if result.ProbeTransport == "" {
+			result.ProbeTransport = "POST_FORM"
+		}
+	}
+
+	body, status, err = doGraphQLGet(client, endpoint, cookie, "query IluskaXProbe { __typename }")
+	if err == nil && status < 500 && looksLikeGraphQL(body) {
+		result.SupportsGET = true
+		if result.ProbeTransport == "" {
+			result.ProbeTransport = "GET"
 		}
 	}
 
 	return result, result.SupportsPOST || result.SupportsGET
 }
 
-func probeGraphQLIntrospection(client *http.Client, endpoint, cookie string) (bool, *graphqlSchema, bool) {
-	body, status, err := doGraphQLPost(client, endpoint, cookie, graphqlRequest{Query: graphqlIntrospectionQuery})
-	if err != nil || status >= 500 {
-		return false, nil, false
+type graphqlIntrospectionProbe struct {
+	Name        string
+	Transport   string
+	Query       string
+	RawJSONBody string
+	ContentType string
+}
+
+func probeGraphQLIntrospection(client *http.Client, result graphqlEndpointResult, cookie string) (bool, *graphqlSchema, bool, string) {
+	verbose := false
+	for _, probe := range graphqlIntrospectionProbes(result) {
+		body, status, err := doGraphQLIntrospectionProbe(client, result.URL, cookie, probe)
+		if err != nil || status >= 500 {
+			continue
+		}
+
+		var parsed graphqlSchemaResponse
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			continue
+		}
+
+		verbose = verbose || hasVerboseGraphQLErrors(parsed.Errors)
+		schema := parsed.Data.Schema
+		if schema.QueryType.Name == "" || len(schema.Types) == 0 {
+			schema = parsed.Data.SchemaAlias
+		}
+		if schema.QueryType.Name == "" || len(schema.Types) == 0 {
+			continue
+		}
+		return true, &schema, verbose, probe.Name
+	}
+	return false, nil, verbose, ""
+}
+
+func graphqlIntrospectionProbes(result graphqlEndpointResult) []graphqlIntrospectionProbe {
+	var probes []graphqlIntrospectionProbe
+	addPOST := func(name, query string) {
+		probes = append(probes, graphqlIntrospectionProbe{
+			Name:      name,
+			Transport: "POST",
+			Query:     query,
+		})
+	}
+	addGET := func(name, query string) {
+		probes = append(probes, graphqlIntrospectionProbe{
+			Name:      name,
+			Transport: "GET",
+			Query:     query,
+		})
+	}
+	addPOSTForm := func(name, query string) {
+		probes = append(probes, graphqlIntrospectionProbe{
+			Name:      name,
+			Transport: "POST_FORM",
+			Query:     query,
+		})
 	}
 
-	var parsed graphqlSchemaResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return false, nil, false
+	if result.SupportsPOST {
+		addPOST("POST JSON", graphqlIntrospectionQuery)
+		for _, bypass := range graphqlIntrospectionBypassTokens {
+			addPOST("POST JSON "+bypass.name, graphqlSchemaTokenQuery(graphqlIntrospectionQuery, bypass.token))
+		}
+		addPOST("POST JSON compact alias", graphqlCompactIntrospectionQuery)
+		for _, bypass := range graphqlIntrospectionBypassTokens {
+			addPOST("POST JSON compact alias "+bypass.name, graphqlSchemaTokenQuery(graphqlCompactIntrospectionQuery, bypass.token))
+		}
+		addPOSTForm("POST form query parameter", graphqlIntrospectionQuery)
+		for _, bypass := range graphqlIntrospectionBypassTokens {
+			addPOSTForm("POST form "+bypass.name, graphqlSchemaTokenQuery(graphqlIntrospectionQuery, bypass.token))
+		}
+		probes = append(probes, graphqlIntrospectionProbe{
+			Name:        "POST application/graphql",
+			Transport:   "POST_RAW",
+			Query:       graphqlCompactIntrospectionQuery,
+			ContentType: "application/graphql",
+		})
+		probes = append(probes, graphqlIntrospectionProbe{
+			Name:        "POST JSON unicode escaped introspection token",
+			Transport:   "POST_RAW",
+			RawJSONBody: graphqlUnicodeEscapedRequest(graphqlIntrospectionQuery),
+			ContentType: "application/json",
+		})
 	}
+	if result.SupportsGET {
+		addGET("GET query parameter", graphqlIntrospectionQuery)
+		for _, bypass := range graphqlIntrospectionBypassTokens {
+			addGET("GET query parameter "+bypass.name, graphqlSchemaTokenQuery(graphqlIntrospectionQuery, bypass.token))
+		}
+		addGET("GET compact alias query parameter", graphqlCompactIntrospectionQuery)
+		for _, bypass := range graphqlIntrospectionBypassTokens {
+			addGET("GET compact alias query parameter "+bypass.name, graphqlSchemaTokenQuery(graphqlCompactIntrospectionQuery, bypass.token))
+		}
+	}
+	return probes
+}
 
-	verbose := hasVerboseGraphQLErrors(parsed.Errors)
-	if parsed.Data.Schema.QueryType.Name == "" || len(parsed.Data.Schema.Types) == 0 {
-		return false, nil, verbose
+func graphqlSchemaTokenQuery(query, token string) string {
+	if strings.Contains(query, "schema:__schema{") {
+		return strings.Replace(query, "schema:__schema{", "schema:"+token+"{", 1)
 	}
-	return true, &parsed.Data.Schema, verbose
+	if strings.Contains(query, "schema:__schema {") {
+		return strings.Replace(query, "schema:__schema {", "schema:"+token+" {", 1)
+	}
+	if strings.Contains(query, "__schema{") {
+		return strings.Replace(query, "__schema{", token+"{", 1)
+	}
+	return strings.Replace(query, "__schema {", token+" {", 1)
+}
+
+func doGraphQLIntrospectionProbe(client *http.Client, endpoint, cookie string, probe graphqlIntrospectionProbe) ([]byte, int, error) {
+	switch probe.Transport {
+	case "GET":
+		return doGraphQLGet(client, endpoint, cookie, probe.Query)
+	case "POST_FORM":
+		return doGraphQLPostForm(client, endpoint, cookie, probe.Query)
+	case "POST_RAW":
+		body := probe.RawJSONBody
+		if body == "" {
+			body = probe.Query
+		}
+		return doGraphQLPostRaw(client, endpoint, cookie, []byte(body), probe.ContentType)
+	default:
+		return doGraphQLPost(client, endpoint, cookie, graphqlRequest{Query: probe.Query})
+	}
 }
 
 func probeGraphQLBatching(client *http.Client, endpoint, cookie string) bool {
@@ -313,8 +531,8 @@ func probeGraphQLBatching(client *http.Client, endpoint, cookie string) bool {
 	return len(batched) == 2
 }
 
-func probeGraphQLVerboseErrors(client *http.Client, endpoint, cookie string) bool {
-	body, status, err := doGraphQLPost(client, endpoint, cookie, graphqlRequest{Query: "query IluskaXInvalidField { profilee { id } }"})
+func probeGraphQLVerboseErrors(client *http.Client, result graphqlEndpointResult, cookie string) bool {
+	body, status, err := doGraphQLQuery(client, result, cookie, "query IluskaXInvalidField { profilee { id } }")
 	if err != nil || status >= 500 {
 		return false
 	}
@@ -325,17 +543,71 @@ func probeGraphQLVerboseErrors(client *http.Client, endpoint, cookie string) boo
 	return hasVerboseGraphQLErrors(parsed.Errors)
 }
 
+func doGraphQLQuery(client *http.Client, result graphqlEndpointResult, cookie, query string) ([]byte, int, error) {
+	if result.ProbeTransport == "GET" || (!result.SupportsPOST && result.SupportsGET) {
+		return doGraphQLGet(client, result.URL, cookie, query)
+	}
+	if result.ProbeTransport == "POST_FORM" {
+		return doGraphQLPostForm(client, result.URL, cookie, query)
+	}
+	return doGraphQLPost(client, result.URL, cookie, graphqlRequest{Query: query})
+}
+
 func doGraphQLPost(client *http.Client, endpoint, cookie string, payload interface{}) ([]byte, int, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, 0, err
 	}
+	return doGraphQLPostRaw(client, endpoint, cookie, data, "application/json")
+}
+
+func doGraphQLPostRaw(client *http.Client, endpoint, cookie string, data []byte, contentType string) ([]byte, int, error) {
 	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, err
 	}
 	ApplyHeaders(req, cookie)
-	req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	return body, resp.StatusCode, err
+}
+
+func doGraphQLPostForm(client *http.Client, endpoint, cookie, query string) ([]byte, int, error) {
+	data := url.Values{}
+	data.Set("query", query)
+	return doGraphQLPostRaw(client, endpoint, cookie, []byte(data.Encode()), "application/x-www-form-urlencoded")
+}
+
+func graphqlUnicodeEscapedRequest(query string) string {
+	data, err := json.Marshal(query)
+	if err != nil {
+		return `{"query":"query IluskaXIntrospection { \u005f\u005fschema { queryType { name } } }"}`
+	}
+	escapedQuery := strings.ReplaceAll(string(data), "__schema", `\u005f\u005fschema`)
+	return `{"query":` + escapedQuery + `}`
+}
+
+func doGraphQLGet(client *http.Client, endpoint, cookie, query string) ([]byte, int, error) {
+	getURL, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, 0, err
+	}
+	q := getURL.Query()
+	q.Set("query", query)
+	getURL.RawQuery = q.Encode()
+	req, err := http.NewRequest("GET", getURL.String(), nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	ApplyHeaders(req, cookie)
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -397,7 +669,7 @@ func recordGraphQLFindings(result graphqlEndpointResult, rc *ui.ReportCollector)
 			Type:     ui.VulnGraphQL,
 			Level:    ui.LevelWarning,
 			URL:      result.URL,
-			Payload:  "Introspection enabled",
+			Payload:  graphqlIntrospectionPayload(result),
 			Detail:   graphqlSchemaSummary(result.Schema),
 			Severity: "medium",
 		})
@@ -428,6 +700,9 @@ func logGraphQLResult(w io.Writer, result graphqlEndpointResult) {
 	fmt.Fprintf(w, "│  [FOUND] %s (%s)\n", result.URL, graphqlTransportSummary(result))
 	if result.IntrospectionEnabled {
 		fmt.Fprintf(w, "│  [WARN] Introspection enabled: %s\n", graphqlSchemaSummary(result.Schema))
+		if result.IntrospectionProbe != "" && result.IntrospectionProbe != "POST JSON" {
+			fmt.Fprintf(w, "│  [WARN] Introspection bypass/alternate probe worked: %s\n", result.IntrospectionProbe)
+		}
 	} else {
 		fmt.Fprintln(w, "│  [INFO] Introspection disabled or blocked")
 	}
@@ -437,6 +712,13 @@ func logGraphQLResult(w io.Writer, result graphqlEndpointResult) {
 	if result.VerboseErrors {
 		fmt.Fprintln(w, "│  [WARN] Verbose GraphQL validation errors exposed")
 	}
+}
+
+func graphqlIntrospectionPayload(result graphqlEndpointResult) string {
+	if result.IntrospectionProbe == "" || result.IntrospectionProbe == "POST JSON" {
+		return "Introspection enabled"
+	}
+	return "Introspection enabled via " + result.IntrospectionProbe
 }
 
 func graphqlTransportSummary(result graphqlEndpointResult) string {
@@ -459,6 +741,7 @@ func saveGraphQLSchemas(results []graphqlEndpointResult, opts GraphQLScanOptions
 		artifact := graphqlSchemaArtifact{
 			Endpoint:             result.URL,
 			Transport:            graphqlTransportSummary(result),
+			IntrospectionProbe:   result.IntrospectionProbe,
 			IntrospectionEnabled: result.IntrospectionEnabled,
 			BatchingEnabled:      result.BatchingEnabled,
 			VerboseErrors:        result.VerboseErrors,

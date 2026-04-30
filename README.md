@@ -138,6 +138,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-json-out` | empty | Output JSON report path |
 | `-graphql-schema-dir` | `Poutput/graphql` | Directory for GraphQL schema artifacts |
 | `-graphql-schema-out` | empty | Single JSON file for GraphQL schema artifacts |
+| `-graphql-endpoint` | empty | Manual GraphQL endpoint URL or path, repeatable, e.g. `/graphql/v1` |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## `pentest` Flags
@@ -159,6 +160,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-json-out` | empty | Export final report to JSON |
 | `-graphql-schema-dir` | `Poutput/graphql` | Directory for GraphQL schema artifacts |
 | `-graphql-schema-out` | empty | Single JSON file for GraphQL schema artifacts |
+| `-graphql-base-url` | empty | Base URL for resolving manual GraphQL endpoint paths |
+| `-graphql-endpoint` | empty | Manual GraphQL endpoint URL or path, repeatable, e.g. `/graphql/v1` |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## Custom Headers
@@ -209,10 +212,12 @@ External tool rate limiting is applied to:
 
 Pentest phase `6` performs safe GraphQL checks:
 
-- endpoint discovery from crawled URLs plus common paths such as `/graphql`, `/api/graphql`, `/query`, and `/gql`
+- endpoint discovery from crawled URLs plus common paths such as `/graphql`, `/api`, `/api/graphql`, `/query`, `/gql`, and API prefixes inferred from crawled paths
+- manual endpoint injection with `-graphql-endpoint`, useful for PortSwigger labs with hidden paths such as `/graphql/v1`
 - safe probing of crawled non-static endpoints because GraphQL is not always hosted on a path named `/graphql`
-- `POST` / `GET` transport probing with `__typename`
+- `POST` / `GET` transport probing with `__typename`; when `POST` is blocked, follow-up checks use the GET `query` parameter
 - introspection detection and schema summary for queries, mutations, subscriptions, and types
+- safe alternate introspection probes for blocked raw POST bodies: GET `query`, POST form `query`, compact alias query, `application/graphql`, JSON unicode-escaped introspection token, and newline/comma/comment after `__schema`
 - JSON batching detection
 - verbose validation error detection
 
@@ -220,6 +225,12 @@ Schema artifacts are written to `Poutput/graphql` by default and are not printed
 
 ```bash
 ./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -graphql-schema-out Poutput/graphql/example-schema.json
+```
+
+For a known PortSwigger GraphQL endpoint, inject it directly:
+
+```bash
+./luska -u https://YOUR-LAB.web-security-academy.net -ps -graphql-endpoint /graphql/v1
 ```
 
 Mutations are never executed by this phase. To skip it:
@@ -333,7 +344,7 @@ Important:
 
 ### Phase 6: GraphQL
 
-Safely discovers GraphQL endpoints, checks whether `POST` or `GET` queries are accepted, detects enabled introspection, summarizes exposed schema operations, and checks for JSON batching and verbose validation errors.
+Safely discovers GraphQL endpoints, checks whether `POST` or GET `query` parameters are accepted, detects enabled introspection, tries safe alternate introspection probes when the basic POST body is blocked, summarizes exposed schema operations, and checks for JSON batching and verbose validation errors.
 
 This phase also probes crawled non-static endpoints, because GraphQL can live behind paths such as `/api`, `/gateway`, or `/v1`. Schema artifacts are saved to `Poutput/graphql` by default, or to `-graphql-schema-out` when a single custom JSON file is requested.
 

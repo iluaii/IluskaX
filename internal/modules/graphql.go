@@ -53,6 +53,7 @@ type graphqlResponse struct {
 	Errors []struct {
 		Message string `json:"message"`
 	} `json:"errors"`
+	Extensions map[string]json.RawMessage `json:"extensions"`
 }
 
 type graphqlSchemaResponse struct {
@@ -102,12 +103,20 @@ type graphqlTypeRef struct {
 type graphqlEndpointResult struct {
 	URL                  string
 	SupportsPOST         bool
+	SupportsPOSTForm     bool
 	SupportsGET          bool
 	ProbeTransport       string
 	IntrospectionProbe   string
 	IntrospectionEnabled bool
 	BatchingEnabled      bool
 	VerboseErrors        bool
+	BrowserSubmittable   bool
+	PersistedQueryHint   bool
+	FederationSDLExposed bool
+	AliasAccepted        bool
+	DebugSignals         []string
+	IDEExposures         []string
+	RiskyOperations      []string
 	Schema               *graphqlSchema
 }
 
@@ -125,6 +134,13 @@ type graphqlSchemaArtifact struct {
 	IntrospectionEnabled  bool     `json:"introspection_enabled"`
 	BatchingEnabled       bool     `json:"batching_enabled"`
 	VerboseErrors         bool     `json:"verbose_errors"`
+	BrowserSubmittable    bool     `json:"browser_submittable"`
+	PersistedQueryHint    bool     `json:"persisted_query_hint"`
+	FederationSDLExposed  bool     `json:"federation_sdl_exposed"`
+	AliasAccepted         bool     `json:"alias_accepted"`
+	DebugSignals          []string `json:"debug_signals,omitempty"`
+	IDEExposures          []string `json:"ide_exposures,omitempty"`
+	RiskyOperations       []string `json:"risky_operations,omitempty"`
 	Summary               string   `json:"summary"`
 	OperationPreview      []string `json:"operation_preview"`
 	Schema                any      `json:"schema,omitempty"`
@@ -179,12 +195,40 @@ func GraphQLScan(urls []string, w io.Writer, cookie string, limiter <-chan time.
 		}
 		result.VerboseErrors = result.VerboseErrors || probeGraphQLVerboseErrors(client, result, cookie)
 
+		if limiter != nil {
+			<-limiter
+		}
+		result.DebugSignals = probeGraphQLDebugSignals(client, result, cookie)
+
+		if limiter != nil {
+			<-limiter
+		}
+		result.PersistedQueryHint = probeGraphQLPersistedQuery(client, result.URL, cookie)
+
+		if limiter != nil {
+			<-limiter
+		}
+		result.FederationSDLExposed = probeGraphQLFederation(client, result, cookie)
+
+		if limiter != nil {
+			<-limiter
+		}
+		result.AliasAccepted = probeGraphQLAliases(client, result, cookie)
+
+		if limiter != nil {
+			<-limiter
+		}
+		result.IDEExposures = probeGraphQLIDEs(client, endpoint, cookie)
+
 		if result.SupportsPOST {
 			if limiter != nil {
 				<-limiter
 			}
 			result.BatchingEnabled = probeGraphQLBatching(client, endpoint, cookie)
 		}
+
+		result.BrowserSubmittable = result.SupportsGET || result.SupportsPOSTForm
+		result.RiskyOperations = graphqlRiskyOperations(result.Schema, 50)
 
 		found = append(found, result)
 		recordGraphQLFindings(result, rc)
@@ -372,6 +416,7 @@ func probeGraphQLEndpoint(client *http.Client, endpoint, cookie string) (graphql
 	body, status, err = doGraphQLPostForm(client, endpoint, cookie, "query IluskaXProbe { __typename }")
 	if err == nil && status < 500 && looksLikeGraphQL(body) {
 		result.SupportsPOST = true
+		result.SupportsPOSTForm = true
 		if result.ProbeTransport == "" {
 			result.ProbeTransport = "POST_FORM"
 		}
@@ -543,6 +588,147 @@ func probeGraphQLVerboseErrors(client *http.Client, result graphqlEndpointResult
 	return hasVerboseGraphQLErrors(parsed.Errors)
 }
 
+func probeGraphQLDebugSignals(client *http.Client, result graphqlEndpointResult, cookie string) []string {
+	body, status, err := doGraphQLQuery(client, result, cookie, "query IluskaXDebugProbe { __typename }")
+	if err != nil || status >= 500 {
+		return nil
+	}
+
+	var signals []string
+	var parsed graphqlResponse
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		for key := range parsed.Extensions {
+			lower := strings.ToLower(key)
+			switch {
+			case strings.Contains(lower, "tracing"):
+				signals = append(signals, "extensions."+key)
+			case strings.Contains(lower, "cachecontrol") || strings.Contains(lower, "cache_control"):
+				signals = append(signals, "extensions."+key)
+			case strings.Contains(lower, "debug"):
+				signals = append(signals, "extensions."+key)
+			}
+		}
+	}
+
+	lowerBody := strings.ToLower(string(body))
+	for _, marker := range []string{"stacktrace", "stack trace", "\"exception\"", "\"debug\"", "extensions.tracing"} {
+		if strings.Contains(lowerBody, marker) {
+			signals = append(signals, marker)
+		}
+	}
+	return uniqueStrings(signals)
+}
+
+func probeGraphQLPersistedQuery(client *http.Client, endpoint, cookie string) bool {
+	payload := map[string]interface{}{
+		"operationName": "IluskaXPersistedQueryProbe",
+		"variables":     map[string]interface{}{},
+		"extensions": map[string]interface{}{
+			"persistedQuery": map[string]interface{}{
+				"version":    1,
+				"sha256Hash": strings.Repeat("0", 64),
+			},
+		},
+	}
+	body, status, err := doGraphQLPost(client, endpoint, cookie, payload)
+	if err != nil || status >= 500 {
+		return false
+	}
+	lowerBody := strings.ToLower(string(body))
+	return strings.Contains(lowerBody, "persistedquerynotfound") ||
+		strings.Contains(lowerBody, "persisted query not found") ||
+		strings.Contains(lowerBody, "persistedquerynotsupported") ||
+		strings.Contains(lowerBody, "persisted query")
+}
+
+func probeGraphQLFederation(client *http.Client, result graphqlEndpointResult, cookie string) bool {
+	body, status, err := doGraphQLQuery(client, result, cookie, "query IluskaXFederationProbe { _service { sdl } }")
+	if err != nil || status >= 500 {
+		return false
+	}
+
+	var parsed struct {
+		Data struct {
+			Service struct {
+				SDL string `json:"sdl"`
+			} `json:"_service"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false
+	}
+	return strings.TrimSpace(parsed.Data.Service.SDL) != ""
+}
+
+func probeGraphQLAliases(client *http.Client, result graphqlEndpointResult, cookie string) bool {
+	body, status, err := doGraphQLQuery(client, result, cookie, "query IluskaXAliasProbe { a: __typename b: __typename c: __typename }")
+	if err != nil || status >= 500 {
+		return false
+	}
+	var parsed graphqlResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false
+	}
+	return len(parsed.Data) > 0 && string(parsed.Data) != "null" && len(parsed.Errors) == 0
+}
+
+func probeGraphQLIDEs(client *http.Client, endpoint, cookie string) []string {
+	var found []string
+	for _, candidate := range graphqlIDEURLs(endpoint) {
+		body, status, contentType, err := doGraphQLRawGet(client, candidate, cookie, "text/html,application/xhtml+xml")
+		if err != nil || status >= 500 {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(contentType), "html") && !looksLikeGraphQLIDE(body) {
+			continue
+		}
+		if name := graphqlIDEName(body); name != "" {
+			found = append(found, fmt.Sprintf("%s at %s", name, candidate))
+		}
+	}
+	return uniqueStrings(found)
+}
+
+func graphqlIDEURLs(endpoint string) []string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return []string{endpoint}
+	}
+
+	paths := []string{parsed.EscapedPath(), "/graphql", "/graphiql", "/playground", "/graphql/playground", "/graphql/console", "/altair", "/api/graphql"}
+	var urls []string
+	for _, p := range paths {
+		if p == "" {
+			p = "/"
+		}
+		u := *parsed
+		u.Path = p
+		u.RawQuery = ""
+		u.Fragment = ""
+		urls = append(urls, u.String())
+	}
+	return uniqueStrings(urls)
+}
+
+func looksLikeGraphQLIDE(body []byte) bool {
+	return graphqlIDEName(body) != ""
+}
+
+func graphqlIDEName(body []byte) string {
+	lower := strings.ToLower(string(body))
+	switch {
+	case strings.Contains(lower, "apollo sandbox") || strings.Contains(lower, "embeddablesandbox"):
+		return "Apollo Sandbox"
+	case strings.Contains(lower, "graphql playground") || strings.Contains(lower, "graphql-playground"):
+		return "GraphQL Playground"
+	case strings.Contains(lower, "graphiql"):
+		return "GraphiQL"
+	case strings.Contains(lower, "altair"):
+		return "Altair GraphQL Client"
+	}
+	return ""
+}
+
 func doGraphQLQuery(client *http.Client, result graphqlEndpointResult, cookie, query string) ([]byte, int, error) {
 	if result.ProbeTransport == "GET" || (!result.SupportsPOST && result.SupportsGET) {
 		return doGraphQLGet(client, result.URL, cookie, query)
@@ -616,6 +802,24 @@ func doGraphQLGet(client *http.Client, endpoint, cookie, query string) ([]byte, 
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	return body, resp.StatusCode, err
+}
+
+func doGraphQLRawGet(client *http.Client, endpoint, cookie, accept string) ([]byte, int, string, error) {
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	ApplyHeaders(req, cookie)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	return body, resp.StatusCode, resp.Header.Get("Content-Type"), err
 }
 
 func looksLikeGraphQL(body []byte) bool {
@@ -694,6 +898,66 @@ func recordGraphQLFindings(result graphqlEndpointResult, rc *ui.ReportCollector)
 			Severity: "low",
 		})
 	}
+	if result.BrowserSubmittable {
+		rc.AddFinding(ui.Finding{
+			Type:     ui.VulnGraphQL,
+			Level:    ui.LevelWarning,
+			URL:      result.URL,
+			Payload:  "Browser-submittable GraphQL transport",
+			Detail:   "GET or form POST accepted",
+			Severity: "low",
+		})
+	}
+	if len(result.IDEExposures) > 0 {
+		rc.AddFinding(ui.Finding{
+			Type:     ui.VulnGraphQL,
+			Level:    ui.LevelWarning,
+			URL:      result.URL,
+			Payload:  "GraphQL IDE exposed",
+			Detail:   strings.Join(result.IDEExposures, "; "),
+			Severity: "medium",
+		})
+	}
+	if len(result.DebugSignals) > 0 {
+		rc.AddFinding(ui.Finding{
+			Type:     ui.VulnGraphQL,
+			Level:    ui.LevelWarning,
+			URL:      result.URL,
+			Payload:  "GraphQL debug metadata exposed",
+			Detail:   strings.Join(result.DebugSignals, ", "),
+			Severity: "low",
+		})
+	}
+	if result.PersistedQueryHint {
+		rc.AddFinding(ui.Finding{
+			Type:     ui.VulnGraphQL,
+			Level:    ui.LevelInfo,
+			URL:      result.URL,
+			Payload:  "Persisted query support hinted",
+			Detail:   "Apollo persisted query response observed",
+			Severity: "info",
+		})
+	}
+	if result.FederationSDLExposed {
+		rc.AddFinding(ui.Finding{
+			Type:     ui.VulnGraphQL,
+			Level:    ui.LevelWarning,
+			URL:      result.URL,
+			Payload:  "Apollo Federation SDL exposed",
+			Detail:   "_service { sdl } returned schema SDL",
+			Severity: "medium",
+		})
+	}
+	if len(result.RiskyOperations) > 0 {
+		rc.AddFinding(ui.Finding{
+			Type:     ui.VulnGraphQL,
+			Level:    ui.LevelWarning,
+			URL:      result.URL,
+			Payload:  "Sensitive GraphQL operations in schema",
+			Detail:   strings.Join(limitStrings(result.RiskyOperations, 8), "; "),
+			Severity: "medium",
+		})
+	}
 }
 
 func logGraphQLResult(w io.Writer, result graphqlEndpointResult) {
@@ -712,6 +976,27 @@ func logGraphQLResult(w io.Writer, result graphqlEndpointResult) {
 	if result.VerboseErrors {
 		fmt.Fprintln(w, "│  [WARN] Verbose GraphQL validation errors exposed")
 	}
+	if result.BrowserSubmittable {
+		fmt.Fprintln(w, "│  [WARN] Browser-submittable transport accepted (GET or form POST)")
+	}
+	if len(result.IDEExposures) > 0 {
+		fmt.Fprintf(w, "│  [WARN] GraphQL IDE exposed: %s\n", strings.Join(result.IDEExposures, "; "))
+	}
+	if len(result.DebugSignals) > 0 {
+		fmt.Fprintf(w, "│  [WARN] Debug metadata exposed: %s\n", strings.Join(result.DebugSignals, ", "))
+	}
+	if result.PersistedQueryHint {
+		fmt.Fprintln(w, "│  [INFO] Persisted query support hinted")
+	}
+	if result.FederationSDLExposed {
+		fmt.Fprintln(w, "│  [WARN] Apollo Federation SDL exposed via _service { sdl }")
+	}
+	if result.AliasAccepted {
+		fmt.Fprintln(w, "│  [INFO] GraphQL aliases accepted")
+	}
+	if len(result.RiskyOperations) > 0 {
+		fmt.Fprintf(w, "│  [WARN] Sensitive operations: %s\n", strings.Join(limitStrings(result.RiskyOperations, 6), "; "))
+	}
 }
 
 func graphqlIntrospectionPayload(result graphqlEndpointResult) string {
@@ -725,6 +1010,9 @@ func graphqlTransportSummary(result graphqlEndpointResult) string {
 	var methods []string
 	if result.SupportsPOST {
 		methods = append(methods, "POST")
+	}
+	if result.SupportsPOSTForm {
+		methods = append(methods, "POST_FORM")
 	}
 	if result.SupportsGET {
 		methods = append(methods, "GET")
@@ -745,6 +1033,13 @@ func saveGraphQLSchemas(results []graphqlEndpointResult, opts GraphQLScanOptions
 			IntrospectionEnabled: result.IntrospectionEnabled,
 			BatchingEnabled:      result.BatchingEnabled,
 			VerboseErrors:        result.VerboseErrors,
+			BrowserSubmittable:   result.BrowserSubmittable,
+			PersistedQueryHint:   result.PersistedQueryHint,
+			FederationSDLExposed: result.FederationSDLExposed,
+			AliasAccepted:        result.AliasAccepted,
+			DebugSignals:         result.DebugSignals,
+			IDEExposures:         result.IDEExposures,
+			RiskyOperations:      result.RiskyOperations,
 			Summary:              graphqlSchemaSummary(result.Schema),
 			OperationPreview:     graphqlOperationLines(result.Schema, 100),
 			Schema:               result.Schema,
@@ -869,6 +1164,52 @@ func graphqlOperationLines(schema *graphqlSchema, limit int) []string {
 	return lines
 }
 
+func graphqlRiskyOperations(schema *graphqlSchema, limit int) []string {
+	if schema == nil {
+		return nil
+	}
+	typeByName := map[string]graphqlType{}
+	for _, t := range schema.Types {
+		typeByName[t.Name] = t
+	}
+
+	keywords := []string{
+		"admin", "apikey", "api_key", "auth", "backup", "changeemail", "changepassword",
+		"create", "delete", "disablemfa", "export", "impersonate", "invite", "login",
+		"password", "payment", "permission", "reset", "role", "secret",
+		"token", "upload", "webhook",
+	}
+	var risky []string
+	appendRisky := func(label, typeName string) {
+		if typeName == "" || len(risky) >= limit {
+			return
+		}
+		t, ok := typeByName[typeName]
+		if !ok {
+			return
+		}
+		for _, f := range t.Fields {
+			if len(risky) >= limit {
+				return
+			}
+			haystack := strings.ToLower(f.Name)
+			if label == "mutation" {
+				haystack += " mutation"
+			}
+			for _, keyword := range keywords {
+				if strings.Contains(haystack, keyword) {
+					risky = append(risky, fmt.Sprintf("%s %s%s: %s", label, f.Name, graphqlArgsString(f.Args), graphqlTypeString(f.Type)))
+					break
+				}
+			}
+		}
+	}
+	appendRisky("query", schema.QueryType.Name)
+	appendRisky("mutation", schema.MutationType.Name)
+	appendRisky("subscription", schema.SubscriptionType.Name)
+	return uniqueStrings(risky)
+}
+
 func graphqlArgsString(args []graphqlArg) string {
 	if len(args) == 0 {
 		return ""
@@ -894,4 +1235,28 @@ func graphqlTypeString(ref graphqlTypeRef) string {
 		return graphqlTypeString(*ref.OfType)
 	}
 	return ref.Kind
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func limitStrings(values []string, limit int) []string {
+	if limit <= 0 || len(values) <= limit {
+		return values
+	}
+	out := append([]string{}, values[:limit]...)
+	out = append(out, fmt.Sprintf("+%d more", len(values)-limit))
+	return out
 }

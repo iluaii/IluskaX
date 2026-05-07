@@ -52,6 +52,17 @@ var jsSignaturePatterns = []struct {
 	{name: "authorization header", re: regexp.MustCompile(`(?i)authorization\s*[:=]\s*["'\x60][^"'\x60]{8,}["'\x60]`)},
 	{name: "private key marker", re: regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
 	{name: "webhook url", re: regexp.MustCompile(`(?i)https://hooks\.(?:slack|zapier)\.com/[^\s"'` + "\x60" + `]+`)},
+	{name: "telegram bot exfil", re: regexp.MustCompile(`(?i)https://api\.telegram\.org/bot[0-9]{6,}:[a-z0-9_-]{20,}/send(?:message|document|photo)`)},
+	{name: "discord webhook exfil", re: regexp.MustCompile(`(?i)https://(?:discord(?:app)?\.com)/api/webhooks/[0-9]{10,}/[a-z0-9_-]{40,}`)},
+	{name: "generic webhook exfil", re: regexp.MustCompile(`(?i)https?://[^"'\x60\s]{1,120}/(?:webhook|collect|gate|grab|steal|logger|log)[^"'\x60\s]*`)},
+	{name: "right click blocked", re: regexp.MustCompile(`(?is)(?:addEventListener\s*\(\s*["']contextmenu["'].{0,160}?preventDefault\s*\(|oncontextmenu\s*=\s*(?:function\s*\([^)]*\)\s*\{.{0,120}?return\s+false|(?:false)))`)},
+	{name: "devtools shortcut blocked", re: regexp.MustCompile(`(?is)(?:key(?:Code)?\s*={2,3}\s*123|["']F12["']|ctrlKey.{0,80}?shiftKey.{0,80}?(?:key(?:Code)?\s*={2,3}\s*(?:73|74|67)|["'](?:i|j|c)["'])|ctrlKey.{0,80}?(?:key(?:Code)?\s*={2,3}\s*85|["']u["']))`)},
+	{name: "copy paste blocked", re: regexp.MustCompile(`(?is)(?:addEventListener\s*\(\s*["'](?:copy|cut|paste|selectstart)["'].{0,160}?preventDefault\s*\(|on(?:copy|cut|paste|selectstart)\s*=\s*(?:function\s*\([^)]*\)\s*\{.{0,120}?return\s+false|false))`)},
+	{name: "anti debugger loop", re: regexp.MustCompile(`(?is)(?:setInterval|setTimeout)\s*\(.{0,240}?\bdebugger\b|Function\s*\(\s*["']debugger["']\s*\)`)},
+	{name: "password field harvesting", re: regexp.MustCompile(`(?is)(?:querySelector(?:All)?|getElementsByName|getElementById)\s*\(.{0,80}?(?:password|input\[type=['"]?password|pass|pwd).{0,220}?(?:value|FormData|fetch|XMLHttpRequest|sendBeacon)`)},
+	{name: "credential form exfil", re: regexp.MustCompile(`(?is)(?:new\s+FormData\s*\(|serialize\s*\(|querySelector\s*\(\s*["'][^"']*form).{0,500}?(?:fetch\s*\(|XMLHttpRequest|sendBeacon|axios\.post|\.send\s*\()`)},
+	{name: "cookie exfil", re: regexp.MustCompile(`(?is)document\.cookie.{0,240}?(?:fetch\s*\(|XMLHttpRequest|sendBeacon|axios\.post|\.send\s*\()`)},
+	{name: "storage exfil", re: regexp.MustCompile(`(?is)(?:localStorage|sessionStorage).{0,260}?(?:fetch\s*\(|XMLHttpRequest|sendBeacon|axios\.post|\.send\s*\()`)},
 }
 
 func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector, sb *ui.StatusBar) {

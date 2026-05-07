@@ -10,19 +10,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"IluskaX/internal/httpheaders"
 )
 
 type Crawler struct {
-	mu           sync.Mutex
-	visited      map[string]bool
-	VisitedPages []string
-	disallowed   []string
-	ticker       *time.Ticker
-	Limiter      <-chan time.Time
-	Client       *http.Client
-	Term         io.Writer
-	File         io.Writer
-	ScopeHost    string
+	mu            sync.Mutex
+	visited       map[string]bool
+	VisitedPages  []string
+	disallowed    []string
+	ticker        *time.Ticker
+	Limiter       <-chan time.Time
+	Client        *http.Client
+	Term          io.Writer
+	File          io.Writer
+	ScopeHost     string
 	CustomHeaders map[string]string
 }
 
@@ -143,7 +145,7 @@ func (c *Crawler) IsDisallowed(uri string) bool {
 }
 
 func (c *Crawler) applyHeaders(req *http.Request) {
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	req.Header.Set("User-Agent", httpheaders.DefaultUserAgent)
 	c.mu.Lock()
 	for k, v := range c.CustomHeaders {
 		req.Header.Set(k, v)

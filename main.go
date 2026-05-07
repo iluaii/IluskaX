@@ -85,7 +85,7 @@ func main() {
 	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
-	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-6)")
+	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-9)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
 	outFile := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
 	jsonOut := flag.String("json-out", "", "Output JSON report file path")
@@ -415,4 +415,7 @@ func printUsage() {
 	fmt.Println("  4  = Dalfox XSS Scan")
 	fmt.Println("  5  = Header & Cookie Analysis")
 	fmt.Println("  6  = GraphQL Endpoint & Schema Scan")
+	fmt.Println("  7  = Open Redirect Check")
+	fmt.Println("  8  = OpenAPI & Sensitive File Discovery")
+	fmt.Println("  9  = Parameter Reflection Map")
 }

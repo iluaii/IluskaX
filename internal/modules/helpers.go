@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"IluskaX/internal/httpheaders"
 )
 
 type PostForm struct {
@@ -123,7 +125,7 @@ func IsStaticAsset(path string) bool {
 }
 
 func ApplyHeaders(req *http.Request, cookie string) {
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; LuskaScanner/1.0)")
+	req.Header.Set("User-Agent", httpheaders.DefaultUserAgent)
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
 	}

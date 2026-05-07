@@ -269,6 +269,7 @@ The crawler collects:
 - GET and POST forms
 - JS files and inline JS blocks
 - endpoints extracted from JavaScript patterns like `fetch`, XHR, axios, template strings, and API assignments
+- JS signatures for exposed secrets, phishing behavior, anti-debugging, blocked browser shortcuts, and obvious exfiltration sinks
 
 It also:
 
@@ -350,6 +351,30 @@ This phase also probes crawled non-static endpoints, because GraphQL can live be
 
 This phase does not execute mutations and does not print the schema body to the terminal.
 
+### Phase 7: Open Redirect
+
+Checks redirect-like query parameters such as `next`, `url`, `redirect`, `return`, `continue`, `callback`, `dest`, and `to`.
+
+The check does not follow redirects. It injects a harmless external URL and reports a finding only when the target responds with a 3xx `Location` header pointing to that URL.
+
+### Phase 8: OpenAPI and Sensitive File Discovery
+
+Safely probes each discovered host for common exposed documentation or sensitive files:
+
+- OpenAPI / Swagger JSON and UI paths
+- `.env`
+- `.git/config`
+- common backup/config/archive/dump filenames
+- `/.well-known/security.txt`
+
+When OpenAPI JSON is found, IluskaX extracts path keys and adds those API routes to the sitemap for reporting.
+
+### Phase 9: Parameter Reflection Map
+
+Builds a lightweight map of reflected query parameters. IluskaX injects a unique harmless marker per parameter and records whether the marker is reflected in HTML text, HTML attributes, URL attributes, script blocks, or escaped output.
+
+This phase is meant for triage: it helps identify which URLs are interesting for manual XSS or template-injection review without sending exploit payloads.
+
 ## Reports
 
 Default files:
@@ -370,7 +395,7 @@ If `-o` is provided, IluskaX also writes a custom export file with:
 If `-json-out` is provided, IluskaX writes a machine-readable JSON report with:
 
 - sitemap
-- findings with level, type, url, payload, and detail
+- findings with level, type, url, payload, detail, and severity
 - summary counts for vulnerabilities, warnings, info findings, and elapsed time
 
 ## TUI Overview
@@ -483,12 +508,15 @@ Phase mapping:
 - `4` = dalfox
 - `5` = header and cookie analysis
 - `6` = GraphQL endpoint and schema scan
+- `7` = open redirect check
+- `8` = OpenAPI and sensitive file discovery
+- `9` = parameter reflection map
 
-For direct `pentest`, supported skip values are `1` through `6`.
+For direct `pentest`, supported skip values are `1` through `9`.
 
 ## Notes
 
-- User-Agent: `LuskaScanner/1.0`
+- User-Agent: `Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0`
 - custom `-H` headers override the default User-Agent if `User-Agent` is specified
 - crawl request timeout is short and optimized for scanning, not browsing
 - JS parsing and endpoint extraction intentionally prefer breadth over perfect semantic accuracy

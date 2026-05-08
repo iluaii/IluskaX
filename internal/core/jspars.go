@@ -43,18 +43,6 @@ var jsSignaturePatterns = []struct {
 	name string
 	re   *regexp.Regexp
 }{
-	{name: "api key", re: regexp.MustCompile(`(?i)(?:api[_-]?key|apikey)\s*[:=]\s*["'\x60][^"'\x60]{6,}["'\x60]`)},
-	{name: "access token", re: regexp.MustCompile(`(?i)(?:access[_-]?token|auth[_-]?token|token)\s*[:=]\s*["'\x60][^"'\x60]{8,}["'\x60]`)},
-	{name: "client secret", re: regexp.MustCompile(`(?i)(?:client[_-]?secret|app[_-]?secret)\s*[:=]\s*["'\x60][^"'\x60]{6,}["'\x60]`)},
-	{name: "secret", re: regexp.MustCompile(`(?i)\bsecret\b\s*[:=]\s*["'\x60][^"'\x60]{6,}["'\x60]`)},
-	{name: "password", re: regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*["'\x60][^"'\x60]{4,}["'\x60]`)},
-	{name: "bearer token", re: regexp.MustCompile(`(?i)bearer\s+[a-z0-9\-_\.=]{10,}`)},
-	{name: "authorization header", re: regexp.MustCompile(`(?i)authorization\s*[:=]\s*["'\x60][^"'\x60]{8,}["'\x60]`)},
-	{name: "private key marker", re: regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
-	{name: "webhook url", re: regexp.MustCompile(`(?i)https://hooks\.(?:slack|zapier)\.com/[^\s"'` + "\x60" + `]+`)},
-	{name: "telegram bot exfil", re: regexp.MustCompile(`(?i)https://api\.telegram\.org/bot[0-9]{6,}:[a-z0-9_-]{20,}/send(?:message|document|photo)`)},
-	{name: "discord webhook exfil", re: regexp.MustCompile(`(?i)https://(?:discord(?:app)?\.com)/api/webhooks/[0-9]{10,}/[a-z0-9_-]{40,}`)},
-	{name: "generic webhook exfil", re: regexp.MustCompile(`(?i)https?://[^"'\x60\s]{1,120}/(?:webhook|collect|gate|grab|steal|logger|log)[^"'\x60\s]*`)},
 	{name: "right click blocked", re: regexp.MustCompile(`(?is)(?:addEventListener\s*\(\s*["']contextmenu["'].{0,160}?preventDefault\s*\(|oncontextmenu\s*=\s*(?:function\s*\([^)]*\)\s*\{.{0,120}?return\s+false|(?:false)))`)},
 	{name: "devtools shortcut blocked", re: regexp.MustCompile(`(?is)(?:key(?:Code)?\s*={2,3}\s*123|["']F12["']|ctrlKey.{0,80}?shiftKey.{0,80}?(?:key(?:Code)?\s*={2,3}\s*(?:73|74|67)|["'](?:i|j|c)["'])|ctrlKey.{0,80}?(?:key(?:Code)?\s*={2,3}\s*85|["']u["']))`)},
 	{name: "copy paste blocked", re: regexp.MustCompile(`(?is)(?:addEventListener\s*\(\s*["'](?:copy|cut|paste|selectstart)["'].{0,160}?preventDefault\s*\(|on(?:copy|cut|paste|selectstart)\s*=\s*(?:function\s*\([^)]*\)\s*\{.{0,120}?return\s+false|false))`)},
@@ -120,6 +108,9 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 							break
 						}
 						scriptURL := base.ResolveReference(ref).String()
+						if !c.InScope(scriptURL) {
+							break
+						}
 						if seenScripts[scriptURL] {
 							break
 						}
@@ -163,10 +154,15 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 
 	allEndpoints := map[string]JSEndpoint{}
 	allSignatures := map[string]JSSignature{}
+	allSecrets := map[string]SecretFinding{}
 	for _, js := range jsSources {
 		base, _ := url.Parse(js.pageURL)
 		for _, ep := range parseJSBody(js.body, js.srcURL, base) {
 			allEndpoints[ep.URL] = ep
+		}
+		for _, secret := range FindSecrets(js.body, js.srcURL) {
+			key := secret.Kind + "|" + secret.Source + "|" + secret.Match
+			allSecrets[key] = secret
 		}
 		for _, sig := range findJSSignatures(js.body, js.srcURL) {
 			key := sig.Name + "|" + sig.Source + "|" + sig.Snippet
@@ -174,7 +170,7 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 		}
 	}
 
-	if len(allEndpoints) == 0 && len(allSignatures) == 0 {
+	if len(allEndpoints) == 0 && len(allSignatures) == 0 && len(allSecrets) == 0 {
 		logf("%s\n", "└─ No endpoints or signatures found in JS")
 		return
 	}
@@ -194,6 +190,9 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 		})
 
 		for _, ep := range endpoints {
+			if !c.InScope(ep.URL) {
+				continue
+			}
 			params := "-"
 			if len(ep.Params) > 0 {
 				params = strings.Join(ep.Params, ", ")
@@ -214,6 +213,39 @@ func (c *Crawler) ScanJS(term io.Writer, file io.Writer, rc *ui.ReportCollector,
 				if rc != nil {
 					rc.AddSitemapURL(withParams)
 				}
+			}
+		}
+	}
+
+	if len(allSecrets) > 0 {
+		secrets := make([]SecretFinding, 0, len(allSecrets))
+		for _, secret := range allSecrets {
+			secrets = append(secrets, secret)
+		}
+		sort.Slice(secrets, func(i, j int) bool {
+			if secrets[i].Kind == secrets[j].Kind {
+				if secrets[i].Source == secrets[j].Source {
+					return secrets[i].Match < secrets[j].Match
+				}
+				return secrets[i].Source < secrets[j].Source
+			}
+			return secrets[i].Kind < secrets[j].Kind
+		})
+
+		logf("├─ Secrets found: %d\n", len(secrets))
+		logf("%s\n", "│")
+		logf("│  %-20s %-18s %s\n", "SECRET", "SOURCE", "MATCH")
+		logf("│  %s\n", strings.Repeat("─", 100))
+		for _, secret := range secrets {
+			logf("│  %-20s %-18s %s\n", ui.Truncate(secret.Kind, 20), ui.Truncate(secret.Source, 18), ui.Truncate(secret.Match, 60))
+			if rc != nil {
+				rc.AddFinding(ui.Finding{
+					Type:    ui.VulnSecret,
+					Level:   secret.Level,
+					URL:     secret.Source,
+					Payload: secret.Kind,
+					Detail:  secret.Match + " | " + secret.Detail,
+				})
 			}
 		}
 	}

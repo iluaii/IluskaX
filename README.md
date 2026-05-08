@@ -101,13 +101,19 @@ If a tool is missing, only the affected phase will fail or be skipped.
 ### Subdomain enumeration with httpx probe
 
 ```bash
-./luska -u https://example.com -sd -ps
+./luska -u https://example.com -sd -ps -scope '*.example.com'
 ```
 
 ### Crawl validated subdomains too before pentest
 
 ```bash
-./luska -u https://example.com -sd -ps -ps-subdomains
+./luska -u https://example.com -sd -ps -ps-subdomains -scope '*.example.com'
+```
+
+### Keep a scan inside an explicit scope
+
+```bash
+./luska -u https://example.com -ps -scope 'api.example.com,*.example.com' -deny-scope 'admin.example.com'
 ```
 
 Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI mode and only the child `pentest` process uses the TUI.
@@ -123,6 +129,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-ps` | `false` | Run pentest after crawl |
 | `-sd` | `false` | Run subdomain enumeration before crawl |
 | `-ps-subdomains` | `false` | Crawl validated subdomains too so pentest covers them |
+| `-scope` | empty | Extra allowed hosts, comma-separated; supports `*.example.com` |
+| `-deny-scope` | empty | Denied hosts, comma-separated; deny wins and supports `*.example.com` |
 | `-rate` | `10` | Requests per second for built-in crawl and pentest HTTP probes |
 | `-ext-rate` | `0` | Requests per second for external tools, `0 = no limit` |
 | `-c` | `5` | Max concurrent goroutines |
@@ -149,6 +157,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-H` | empty | Custom header `Name: Value` (repeatable) |
 | `-host` | `target` | Host label for output/report naming |
 | `-date` | current time | Date tag for output naming |
+| `-scope` | empty | Extra allowed hosts, comma-separated; supports `*.example.com` |
+| `-deny-scope` | empty | Denied hosts, comma-separated; deny wins and supports `*.example.com` |
 | `-skip-phase` | empty | Comma-separated phases to skip |
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
@@ -163,6 +173,20 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-graphql-base-url` | empty | Base URL for resolving manual GraphQL endpoint paths |
 | `-graphql-endpoint` | empty | Manual GraphQL endpoint URL or path, repeatable, e.g. `/graphql/v1` |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
+
+## Scope Guard
+
+IluskaX allows the starting target host by default. Use `-scope` to add more allowed hosts and `-deny-scope` to block hosts even when they match an allow rule.
+
+Examples:
+
+```bash
+./luska -u https://example.com -ps -scope 'api.example.com,*.example.com'
+./luska -u https://example.com -ps -scope '*.example.com' -deny-scope 'admin.example.com'
+./pentest -f crawl.txt -host example.com -scope '*.example.com' -deny-scope 'old.example.com'
+```
+
+The guard is applied to crawled links, forms, JS-discovered endpoints, subdomain probing, subdomain crawl enrichment, and direct `pentest` crawl-file entries. Deny rules always win.
 
 ## Custom Headers
 
@@ -236,7 +260,7 @@ For a known PortSwigger GraphQL endpoint, inject it directly:
 Mutations are never executed by this phase. To skip it:
 
 ```bash
-./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -skip-phase 6
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -skip-phase 4
 ```
 
 Example:
@@ -269,7 +293,8 @@ The crawler collects:
 - GET and POST forms
 - JS files and inline JS blocks
 - endpoints extracted from JavaScript patterns like `fetch`, XHR, axios, template strings, and API assignments
-- JS signatures for exposed secrets, phishing behavior, anti-debugging, blocked browser shortcuts, and obvious exfiltration sinks
+- masked secret findings from JavaScript such as API keys, cloud tokens, JWTs, webhook URLs, and private-key markers
+- JS signatures for phishing behavior, anti-debugging, blocked browser shortcuts, and obvious exfiltration sinks
 
 It also:
 
@@ -300,41 +325,7 @@ If `-ext-rate` is set, it is forwarded to `httpx`.
 
 If `-ps-subdomains` is enabled, these validated subdomains are also crawled as separate in-scope targets before the final pentest starts. This gives later pentest phases more than just the root URL for each live subdomain.
 
-### Phase 1: Quick SQLi Test
-
-Tests parameterized URLs and forms with fast checks:
-
-- time-based payloads
-- boolean-based response comparison
-- POST form checks
-- cookie-based probes when cookies are present
-
-If something suspicious is found, later SQLMap settings are escalated automatically.
-
-### Phase 2: Nuclei
-
-Runs `nuclei` against discovered URLs.
-
-If `-ext-rate` is set, it is forwarded to `nuclei`.
-
-### Phase 3: SQLMap
-
-Runs `sqlmap` against parameterized URLs and POST forms.
-
-Supports:
-
-- automatic escalation after suspicious Phase 1 results
-- Burp request files via `-burp`
-- cookie header forwarding via `-cookie`
-- optional external rate limiting via `-ext-rate`
-
-### Phase 4: Dalfox
-
-Runs `dalfox` against URLs with parameters to detect XSS.
-
-If `-ext-rate` is set, IluskaX lowers Dalfox throughput to approximate that rate.
-
-### Phase 5: Header and Cookie Analysis
+### Phase 1: Header and Cookie Analysis
 
 Checks security-related response headers and cookie settings.
 
@@ -343,21 +334,7 @@ Important:
 - missing headers are treated as recommendations or informational findings
 - real header or cookie misconfigurations are shown separately from confirmed vulnerabilities
 
-### Phase 6: GraphQL
-
-Safely discovers GraphQL endpoints, checks whether `POST` or GET `query` parameters are accepted, detects enabled introspection, tries safe alternate introspection probes when the basic POST body is blocked, summarizes exposed schema operations, and checks for JSON batching and verbose validation errors.
-
-This phase also probes crawled non-static endpoints, because GraphQL can live behind paths such as `/api`, `/gateway`, or `/v1`. Schema artifacts are saved to `Poutput/graphql` by default, or to `-graphql-schema-out` when a single custom JSON file is requested.
-
-This phase does not execute mutations and does not print the schema body to the terminal.
-
-### Phase 7: Open Redirect
-
-Checks redirect-like query parameters such as `next`, `url`, `redirect`, `return`, `continue`, `callback`, `dest`, and `to`.
-
-The check does not follow redirects. It injects a harmless external URL and reports a finding only when the target responds with a 3xx `Location` header pointing to that URL.
-
-### Phase 8: OpenAPI and Sensitive File Discovery
+### Phase 2: OpenAPI and Sensitive File Discovery
 
 Safely probes each discovered host for common exposed documentation or sensitive files:
 
@@ -369,11 +346,75 @@ Safely probes each discovered host for common exposed documentation or sensitive
 
 When OpenAPI JSON is found, IluskaX extracts path keys and adds those API routes to the sitemap for reporting.
 
-### Phase 9: Parameter Reflection Map
+### Phase 3: JavaScript Secret Scanner
+
+During the crawl JS parsing step and pentest phase 3, IluskaX scans external and inline JavaScript for common secret formats and sensitive-looking assignments. Detected values are masked before being printed or exported.
+
+It currently looks for:
+
+- AWS access key IDs and secret-key assignments
+- GitHub, Slack, Stripe, Google API, Telegram bot, and bearer-token formats
+- JWT-like tokens
+- authorization header literals
+- Slack/Zapier/Discord webhook URLs
+- private-key markers
+- generic `apiKey`, `token`, `secret`, and `password` assignments
+
+Placeholder-looking values such as `your_api_key_here` are ignored.
+
+### Phase 4: GraphQL
+
+Safely discovers GraphQL endpoints, checks whether `POST` or GET `query` parameters are accepted, detects enabled introspection, tries safe alternate introspection probes when the basic POST body is blocked, summarizes exposed schema operations, and checks for JSON batching and verbose validation errors.
+
+This phase also probes crawled non-static endpoints, because GraphQL can live behind paths such as `/api`, `/gateway`, or `/v1`. Schema artifacts are saved to `Poutput/graphql` by default, or to `-graphql-schema-out` when a single custom JSON file is requested.
+
+This phase does not execute mutations and does not print the schema body to the terminal.
+
+### Phase 5: Parameter Reflection Map
 
 Builds a lightweight map of reflected query parameters. IluskaX injects a unique harmless marker per parameter and records whether the marker is reflected in HTML text, HTML attributes, URL attributes, script blocks, or escaped output.
 
 This phase is meant for triage: it helps identify which URLs are interesting for manual XSS or template-injection review without sending exploit payloads.
+
+### Phase 6: Open Redirect
+
+Checks redirect-like query parameters such as `next`, `url`, `redirect`, `return`, `continue`, `callback`, `dest`, and `to`.
+
+The check does not follow redirects. It injects a harmless external URL and reports a finding only when the target responds with a 3xx `Location` header pointing to that URL.
+
+### Phase 7: Quick SQLi Test
+
+Tests parameterized URLs and forms with fast checks:
+
+- time-based payloads
+- boolean-based response comparison
+- POST form checks
+- cookie-based probes when cookies are present
+
+If something suspicious is found, later SQLMap settings are escalated automatically.
+
+### Phase 8: Nuclei
+
+Runs `nuclei` against discovered URLs.
+
+If `-ext-rate` is set, it is forwarded to `nuclei`.
+
+### Phase 9: Dalfox
+
+Runs `dalfox` against URLs with parameters to detect XSS.
+
+If `-ext-rate` is set, IluskaX lowers Dalfox throughput to approximate that rate.
+
+### Phase 10: SQLMap
+
+Runs `sqlmap` against parameterized URLs and POST forms.
+
+Supports:
+
+- automatic escalation after suspicious Phase 7 results
+- Burp request files via `-burp`
+- cookie header forwarding via `-cookie`
+- optional external rate limiting via `-ext-rate`
 
 ## Reports
 
@@ -502,17 +543,18 @@ Phase mapping:
 
 - `0` = subdomain enumeration
 - `0.1` = httpx probe (runs automatically after phase 0, cannot be skipped independently)
-- `1` = quick SQLi
-- `2` = nuclei
-- `3` = SQLMap
-- `4` = dalfox
-- `5` = header and cookie analysis
-- `6` = GraphQL endpoint and schema scan
-- `7` = open redirect check
-- `8` = OpenAPI and sensitive file discovery
-- `9` = parameter reflection map
+- `1` = header and cookie analysis
+- `2` = OpenAPI and sensitive file discovery
+- `3` = JavaScript secret scanner
+- `4` = GraphQL endpoint and schema scan
+- `5` = parameter reflection map
+- `6` = open redirect check
+- `7` = quick SQLi
+- `8` = nuclei
+- `9` = dalfox
+- `10` = SQLMap
 
-For direct `pentest`, supported skip values are `1` through `9`.
+For direct `pentest`, supported skip values are `1` through `10`.
 
 ## Notes
 

@@ -25,28 +25,40 @@ type Crawler struct {
 	Term          io.Writer
 	File          io.Writer
 	ScopeHost     string
+	ScopeGuard    *ScopeGuard
 	CustomHeaders map[string]string
 }
 
 func NewCrawler(ratePerSec int, term io.Writer, file io.Writer, scopeHost string) *Crawler {
 	ticker := time.NewTicker(time.Second / time.Duration(ratePerSec))
-	return &Crawler{
-		visited: make(map[string]bool),
-		ticker:  ticker,
-		Limiter: ticker.C,
-		Client: &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
-		},
-		Term:      term,
-		File:      file,
-		ScopeHost: scopeHost,
+	c := &Crawler{
+		visited:    make(map[string]bool),
+		ticker:     ticker,
+		Limiter:    ticker.C,
+		Term:       term,
+		File:       file,
+		ScopeHost:  scopeHost,
+		ScopeGuard: NewScopeGuard(scopeHost, "", ""),
 	}
+	c.Client = &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if !c.InScope(req.URL.String()) {
+				return fmt.Errorf("redirect out of scope: %s", req.URL.Host)
+			}
+			return nil
+		},
+	}
+	return c
+}
+
+func (c *Crawler) SetScopeGuard(guard *ScopeGuard) {
+	c.mu.Lock()
+	c.ScopeGuard = guard
+	c.mu.Unlock()
 }
 
 func (c *Crawler) SetCustomHeaders(headers map[string]string) {
@@ -60,6 +72,12 @@ func (c *Crawler) Stop() {
 }
 
 func (c *Crawler) InScope(uri string) bool {
+	c.mu.Lock()
+	guard := c.ScopeGuard
+	c.mu.Unlock()
+	if guard != nil {
+		return guard.InScope(uri)
+	}
 	parsed, err := url.Parse(uri)
 	if err != nil {
 		return false

@@ -18,7 +18,7 @@ var redirectParamNames = map[string]bool{
 }
 
 func OpenRedirectScan(urls []string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "┌─ [PHASE 7] OPEN REDIRECT CHECK")
+	fmt.Fprintln(w, "┌─ [PHASE 6] OPEN REDIRECT CHECK")
 
 	type candidate struct {
 		raw   string

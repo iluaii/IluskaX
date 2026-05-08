@@ -22,7 +22,7 @@ var securityHeaders = []string{
 }
 
 func HeaderCookieScan(urls []string, w io.Writer, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "┌─ [PHASE 5] HEADER & COOKIE ANALYSIS")
+	fmt.Fprintln(w, "┌─ [PHASE 1] HEADER & COOKIE ANALYSIS")
 	fmt.Fprintf(w, "├─ Scanning %d URLs\n", len(urls))
 
 	client := &http.Client{Timeout: 10 * time.Second}

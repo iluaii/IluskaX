@@ -155,7 +155,7 @@ func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, 
 	if len(forms) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "┌─ [PHASE 3-POST] SQLMAP - POST Forms\n")
+	fmt.Fprintf(w, "┌─ [PHASE 10-POST] SQLMAP - POST Forms\n")
 	fmt.Fprintf(w, "├─ Testing %d POST forms\n", len(forms))
 
 	if sb != nil {
@@ -228,7 +228,7 @@ func SQLMapPostForms(forms []PostForm, w io.Writer, level, risk, cookie string, 
 func EscalateSQLMap(urls []string, w io.Writer, currentLevel, currentRisk, cookie, burpFile string, extRateLimit int, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
 	nextLevel := fmt.Sprintf("%d", minInt(atoi(currentLevel)+1, 3))
 	nextRisk := fmt.Sprintf("%d", minInt(atoi(currentRisk)+1, 3))
-	SQLMapScan(urls, w, nextLevel, nextRisk, cookie, burpFile, extRateLimit, "PHASE 3.1", true, limiter, sb, rc)
+	SQLMapScan(urls, w, nextLevel, nextRisk, cookie, burpFile, extRateLimit, "PHASE 10.1", true, limiter, sb, rc)
 }
 
 func removeArg(args []string, target string) []string {

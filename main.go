@@ -85,7 +85,9 @@ func main() {
 	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
-	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-9)")
+	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-10)")
+	scopeFlag := flag.String("scope", "", "Comma-separated extra allowed hosts (supports *.example.com)")
+	denyScopeFlag := flag.String("deny-scope", "", "Comma-separated denied hosts (deny wins, supports *.example.com)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
 	outFile := flag.String("o", "", "Output report file path (sitemap + vuln tables)")
 	jsonOut := flag.String("json-out", "", "Output JSON report file path")
@@ -127,6 +129,11 @@ func main() {
 	parsed, err := url.Parse(*targetURL)
 	if err != nil {
 		fmt.Printf("ERROR: Invalid URL: %v\n", err)
+		return
+	}
+	scopeGuard := core.NewScopeGuard(parsed.Hostname(), *scopeFlag, *denyScopeFlag)
+	if !scopeGuard.InScope(*targetURL) {
+		fmt.Printf("ERROR: Target is denied by scope guard: %s\n", *targetURL)
 		return
 	}
 
@@ -184,6 +191,10 @@ func main() {
 	if len(skipList) > 0 {
 		fmt.Printf("[*] SKIPPING PATTERNS: %s\n", strings.Join(skipList, ", "))
 	}
+	fmt.Printf("[*] SCOPE ALLOW: %s\n", scopeGuard.AllowSummary())
+	if *denyScopeFlag != "" {
+		fmt.Printf("[*] SCOPE DENY: %s\n", scopeGuard.DenySummary())
+	}
 	if *crawlTimeout > 0 {
 		fmt.Printf("[*] TIMEOUT: %d minutes\n", *crawlTimeout)
 	}
@@ -192,6 +203,17 @@ func main() {
 	var aliveSubdomains []string
 	if *subdomains {
 		found := modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"), *extRateLimit)
+		if len(found) > 0 {
+			var scoped []string
+			for _, sub := range found {
+				if scopeGuard.InScope("https://" + sub) {
+					scoped = append(scoped, sub)
+				} else {
+					fmt.Fprintf(session.Writer("subdomain"), "├─ [SCOPE] skipped out-of-scope subdomain: %s\n", sub)
+				}
+			}
+			found = scoped
+		}
 		if len(found) > 0 {
 			aliveSubdomains = modules.HTTPXProbe(found, f, session.Writer("httpx"), *extRateLimit, sb)
 		}
@@ -218,6 +240,7 @@ func main() {
 	runCrawl := func(seedURL, scopeHost string) {
 		crawlerTerm := ui.NewStatusWriter(sb)
 		crawler := core.NewCrawler(*rateLimit, crawlerTerm, f, scopeHost)
+		crawler.SetScopeGuard(scopeGuard)
 		crawler.SetCustomHeaders(modules.CustomHeaders())
 		defer crawler.Stop()
 		crawler.WriteLine(seedURL)
@@ -253,6 +276,10 @@ func main() {
 				continue
 			}
 			if seenHosts[subParsed.Hostname()] {
+				continue
+			}
+			if !scopeGuard.InScope(subURL) {
+				fmt.Printf("[SCOPE] Skipping out-of-scope subdomain crawl: %s\n", subURL)
 				continue
 			}
 			seenHosts[subParsed.Hostname()] = true
@@ -332,6 +359,12 @@ func main() {
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
 		}
+		if *scopeFlag != "" {
+			pentestArgs = append(pentestArgs, "-scope", *scopeFlag)
+		}
+		if *denyScopeFlag != "" {
+			pentestArgs = append(pentestArgs, "-deny-scope", *denyScopeFlag)
+		}
 		if *sqlmapLevel > 0 {
 			pentestArgs = append(pentestArgs, "-sqlmap-level", fmt.Sprintf("%d", *sqlmapLevel))
 		}
@@ -384,7 +417,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
@@ -392,6 +425,8 @@ func printUsage() {
 	fmt.Println("  -ext-rate      Requests per second for external tools (default: 0 = no limit)")
 	fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
 	fmt.Println("  -ps-subdomains Crawl validated subdomains too so pentest covers them")
+	fmt.Println("  -scope         Extra allowed hosts, comma-separated; supports *.example.com")
+	fmt.Println("  -deny-scope    Denied hosts, comma-separated; deny wins; supports *.example.com")
 	fmt.Println("  -ignore-robots Skip robots.txt restrictions")
 	fmt.Println("  -sqlmap-level  SQLMap starting level 1-5 (default: auto)")
 	fmt.Println("  -sqlmap-risk   SQLMap starting risk 1-3 (default: auto)")
@@ -409,13 +444,14 @@ func printUsage() {
 	fmt.Println("Phases (for -skip-phase):")
 	fmt.Println("  0  = Subdomain Enumeration (subfinder)")
 	fmt.Println("  0.1 = httpx probe (auto after phase 0)")
-	fmt.Println("  1  = Quick SQLi Test")
-	fmt.Println("  2  = NUCLEI Template Scan")
-	fmt.Println("  3  = SQLMap Deep Scan")
-	fmt.Println("  4  = Dalfox XSS Scan")
-	fmt.Println("  5  = Header & Cookie Analysis")
-	fmt.Println("  6  = GraphQL Endpoint & Schema Scan")
-	fmt.Println("  7  = Open Redirect Check")
-	fmt.Println("  8  = OpenAPI & Sensitive File Discovery")
-	fmt.Println("  9  = Parameter Reflection Map")
+	fmt.Println("  1  = Header & Cookie Analysis")
+	fmt.Println("  2  = OpenAPI & Sensitive File Discovery")
+	fmt.Println("  3  = JavaScript Secret Scanner")
+	fmt.Println("  4  = GraphQL Endpoint & Schema Scan")
+	fmt.Println("  5  = Parameter Reflection Map")
+	fmt.Println("  6  = Open Redirect Check")
+	fmt.Println("  7  = Quick SQLi Test")
+	fmt.Println("  8  = NUCLEI Template Scan")
+	fmt.Println("  9  = Dalfox XSS Scan")
+	fmt.Println("  10 = SQLMap Deep Scan")
 }

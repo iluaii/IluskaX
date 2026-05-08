@@ -98,6 +98,7 @@ const (
 	VulnCookie
 	VulnNuclei
 	VulnJS
+	VulnSecret
 	VulnGraphQL
 	VulnRedirect
 	VulnExposure
@@ -118,6 +119,8 @@ func (v VulnType) String() string {
 		return "Nuclei"
 	case VulnJS:
 		return "JS"
+	case VulnSecret:
+		return "Secret"
 	case VulnGraphQL:
 		return "GraphQL"
 	case VulnRedirect:
@@ -170,6 +173,8 @@ func (v VulnType) SectionTitle(count int) string {
 		return fmt.Sprintf(" ◈ %s ISSUES (%d found) ", v.String(), count)
 	case VulnJS:
 		return fmt.Sprintf(" ◈ %s SIGNATURES (%d found) ", v.String(), count)
+	case VulnSecret:
+		return fmt.Sprintf(" ◈ %s FINDINGS (%d found) ", v.String(), count)
 	case VulnGraphQL:
 		return fmt.Sprintf(" ◈ %s FINDINGS (%d found) ", v.String(), count)
 	case VulnRedirect:
@@ -191,6 +196,8 @@ func (v VulnType) SummaryLabel() string {
 		return "Cookie issues"
 	case VulnJS:
 		return "JS signatures"
+	case VulnSecret:
+		return "Secret findings"
 	case VulnGraphQL:
 		return "GraphQL findings"
 	case VulnRedirect:
@@ -212,7 +219,7 @@ func (v VulnType) titleColor() string {
 		return colorYellow + colorBold
 	case VulnHeader, VulnCookie:
 		return colorYellow + colorBold
-	case VulnJS, VulnExposure, VulnReflection:
+	case VulnJS, VulnSecret, VulnExposure, VulnReflection:
 		return colorYellow + colorBold
 	case VulnGraphQL:
 		return colorCyan + colorBold
@@ -228,7 +235,7 @@ func (v VulnType) rowColor() string {
 		return colorYellow
 	case VulnHeader, VulnCookie:
 		return colorDim
-	case VulnJS, VulnExposure, VulnReflection:
+	case VulnJS, VulnSecret, VulnExposure, VulnReflection:
 		return colorYellow
 	case VulnGraphQL:
 		return colorCyan
@@ -244,7 +251,7 @@ func (v VulnType) borderColor() string {
 		return colorYellow
 	case VulnHeader, VulnCookie:
 		return colorCyan
-	case VulnJS, VulnExposure, VulnReflection:
+	case VulnJS, VulnSecret, VulnExposure, VulnReflection:
 		return colorYellow
 	case VulnGraphQL:
 		return colorCyan
@@ -526,7 +533,7 @@ func PrintFindingsTable(findings []Finding, toTerm bool) string {
 	}
 	var out strings.Builder
 	wroteSection := false
-	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnReflection, VulnExposure, VulnHeader, VulnCookie, VulnJS, VulnGraphQL} {
+	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnSecret, VulnReflection, VulnExposure, VulnHeader, VulnCookie, VulnJS, VulnGraphQL} {
 		fs, ok := byType[vt]
 		if !ok {
 			continue
@@ -651,7 +658,7 @@ func renderTable(vt VulnType, findings []Finding, toTerm bool) string {
 		pCell := padRight(pStr, colPayload)
 
 		rowColor := rc
-		if toTerm && (vt == VulnHeader || vt == VulnCookie || vt == VulnJS || vt == VulnGraphQL || vt == VulnExposure || vt == VulnReflection) {
+		if toTerm && (vt == VulnHeader || vt == VulnCookie || vt == VulnJS || vt == VulnSecret || vt == VulnGraphQL || vt == VulnExposure || vt == VulnReflection) {
 			rowColor = f.Level.color()
 		}
 
@@ -705,7 +712,7 @@ func PrintSummary(findings []Finding, startTime time.Time, toTerm bool) string {
 	vulnTotal := 0
 	warningTotal := 0
 	infoTotal := 0
-	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnReflection, VulnExposure, VulnHeader, VulnCookie, VulnJS, VulnGraphQL} {
+	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnSecret, VulnReflection, VulnExposure, VulnHeader, VulnCookie, VulnJS, VulnGraphQL} {
 		if n := counts[vt]; n > 0 {
 			total += n
 			label := fmt.Sprintf("  %-16s : %d", vt.SummaryLabel(), n)

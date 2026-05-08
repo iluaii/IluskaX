@@ -148,7 +148,7 @@ type graphqlSchemaArtifact struct {
 }
 
 func GraphQLScan(urls []string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector, opts GraphQLScanOptions) {
-	fmt.Fprintln(w, "┌─ [PHASE 6] GRAPHQL - Safe endpoint, introspection and schema mapping")
+	fmt.Fprintln(w, "┌─ [PHASE 4] GRAPHQL - Safe endpoint, introspection and schema mapping")
 	if opts.SchemaDir == "" {
 		opts.SchemaDir = filepath.Join("Poutput", "graphql")
 	}

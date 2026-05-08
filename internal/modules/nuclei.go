@@ -10,7 +10,7 @@ import (
 )
 
 func NucleiScan(urlFile string, w io.Writer, cookie string, extRateLimit int, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "┌─ [PHASE 2] NUCLEI - Template-Based Vulnerability Detection")
+	fmt.Fprintln(w, "┌─ [PHASE 8] NUCLEI - Template-Based Vulnerability Detection")
 
 	if sb != nil {
 		sb.SetPhase("NUCLEI", 1)

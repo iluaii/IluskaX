@@ -160,6 +160,10 @@ func (c *Crawler) writeForms(endpointCtx context.Context, uri string, forms []Fo
 			return false
 		default:
 		}
+		if !c.InScope(f.Action) {
+			c.Log("│  ├─ [%d] %s %s [OUT OF SCOPE]\n", i+1, f.Method, f.Action)
+			continue
+		}
 		c.Log("│  ├─ [%d] %s %s\n", i+1, f.Method, f.Action)
 		var params []string
 		for _, inp := range f.Inputs {

@@ -20,7 +20,7 @@ type reflectionCandidate struct {
 }
 
 func ReflectionMapScan(urls []string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "┌─ [PHASE 9] PARAMETER REFLECTION MAP")
+	fmt.Fprintln(w, "┌─ [PHASE 5] PARAMETER REFLECTION MAP")
 
 	candidates := reflectionCandidates(urls)
 	if len(candidates) == 0 {

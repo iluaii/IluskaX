@@ -22,7 +22,7 @@ type exposureProbe struct {
 }
 
 func ExposureScan(urls []string, w io.Writer, cookie string, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
-	fmt.Fprintln(w, "┌─ [PHASE 8] OPENAPI & SENSITIVE FILE DISCOVERY")
+	fmt.Fprintln(w, "┌─ [PHASE 2] OPENAPI & SENSITIVE FILE DISCOVERY")
 
 	hosts := uniqueHosts(urls)
 	if len(hosts) == 0 {

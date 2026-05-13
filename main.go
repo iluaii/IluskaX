@@ -85,7 +85,7 @@ func main() {
 	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
-	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-10)")
+	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-11)")
 	scopeFlag := flag.String("scope", "", "Comma-separated extra allowed hosts (supports *.example.com)")
 	denyScopeFlag := flag.String("deny-scope", "", "Comma-separated denied hosts (deny wins, supports *.example.com)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
@@ -99,6 +99,9 @@ func main() {
 	var graphqlEndpoints multiFlag
 	flag.Var(&headers, "H", "Custom header in 'Name: Value' format (repeatable)")
 	flag.Var(&graphqlEndpoints, "graphql-endpoint", "Manual GraphQL endpoint URL or path (repeatable, e.g. /graphql/v1)")
+	oastServer := flag.String("oast-server", "oast.pro,oast.live", "Interactsh servers for pentest phase 11 (empty disables blind SSRF)")
+	oastToken := flag.String("oast-token", "", "Optional Interactsh token for private servers")
+	oastPoll := flag.Int("oast-poll-seconds", 40, "OAST poll duration for phase 11 (15-180)")
 	flag.Parse()
 
 	if *cookieFile != "" {
@@ -393,6 +396,11 @@ func main() {
 		for _, endpoint := range graphqlEndpoints {
 			pentestArgs = append(pentestArgs, "-graphql-endpoint", endpoint)
 		}
+		pentestArgs = append(pentestArgs, "-oast-server", *oastServer)
+		if *oastToken != "" {
+			pentestArgs = append(pentestArgs, "-oast-token", *oastToken)
+		}
+		pentestArgs = append(pentestArgs, "-oast-poll-seconds", fmt.Sprintf("%d", *oastPoll))
 		if mode == ui.ModeTUI {
 			pentestArgs = append(pentestArgs, "-ui", "tui")
 		}
@@ -439,6 +447,9 @@ func printUsage() {
 	fmt.Println("  -graphql-schema-dir Directory for GraphQL schema artifacts")
 	fmt.Println("  -graphql-schema-out Single JSON file for GraphQL schema artifacts")
 	fmt.Println("  -graphql-endpoint Manual GraphQL endpoint URL or path (repeatable, e.g. /graphql/v1)")
+	fmt.Println("  -oast-server     Interactsh hosts for pentest phase 11 (default oast.pro,oast.live; empty disables OAST)")
+	fmt.Println("  -oast-token       Optional Interactsh token")
+	fmt.Println("  -oast-poll-seconds OAST poll duration (default 40)")
 	fmt.Println("  -ui            UI mode: cli|tui (default: cli)")
 	fmt.Println()
 	fmt.Println("Phases (for -skip-phase):")
@@ -454,4 +465,5 @@ func printUsage() {
 	fmt.Println("  8  = NUCLEI Template Scan")
 	fmt.Println("  9  = Dalfox XSS Scan")
 	fmt.Println("  10 = SQLMap Deep Scan")
+	fmt.Println("  11 = CORS / session triage / blind SSRF (Interactsh)")
 }

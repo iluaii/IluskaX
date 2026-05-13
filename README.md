@@ -147,6 +147,9 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-graphql-schema-dir` | `Poutput/graphql` | Directory for GraphQL schema artifacts |
 | `-graphql-schema-out` | empty | Single JSON file for GraphQL schema artifacts |
 | `-graphql-endpoint` | empty | Manual GraphQL endpoint URL or path, repeatable, e.g. `/graphql/v1` |
+| `-oast-server` | `oast.pro,oast.live` | Interactsh hosts for pentest phase 11; empty string disables blind SSRF |
+| `-oast-token` | empty | Optional token for private Interactsh |
+| `-oast-poll-seconds` | `40` | OAST poll duration after SSRF probes (`15`–`180`) |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## `pentest` Flags
@@ -172,6 +175,9 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-graphql-schema-out` | empty | Single JSON file for GraphQL schema artifacts |
 | `-graphql-base-url` | empty | Base URL for resolving manual GraphQL endpoint paths |
 | `-graphql-endpoint` | empty | Manual GraphQL endpoint URL or path, repeatable, e.g. `/graphql/v1` |
+| `-oast-server` | `oast.pro,oast.live` | Interactsh servers for phase 11; empty disables blind SSRF |
+| `-oast-token` | empty | Optional token for private Interactsh |
+| `-oast-poll-seconds` | `40` | OAST poll window after SSRF probes (`15`–`180`) |
 | `-ui` | `cli` | UI mode: `cli` or `tui` |
 
 ## Scope Guard
@@ -416,6 +422,14 @@ Supports:
 - cookie header forwarding via `-cookie`
 - optional external rate limiting via `-ext-rate`
 
+### Phase 11: CORS, session triage, and blind SSRF (OAST)
+
+Runs after SQLMap:
+
+- **CORS**: reflects a non-application `Origin` (`https://iluska-cors-probe.invalid` and `null`), checks `OPTIONS` preflight, and flags `Access-Control-Allow-Credentials: true` with `Access-Control-Allow-Origin: *`.
+- **Session**: on login-like paths, compares session cookies between two unauthenticated GETs (stable value → informational fixation hint) and notes session-like cookies on HTTPS without `SameSite=Strict`.
+- **SSRF**: for URLs with “URL-like” query parameters, injects a unique per-probe **Interactsh** hostname (`https://…oast…`) and polls for HTTP/DNS callbacks. Controlled by `-oast-server` (default public ProjectDiscovery hosts), `-oast-token`, and `-oast-poll-seconds`. Use `-skip-phase 11` or `-oast-server ""` if outbound OAST must be disabled.
+
 ## Reports
 
 Default files:
@@ -553,8 +567,9 @@ Phase mapping:
 - `8` = nuclei
 - `9` = dalfox
 - `10` = SQLMap
+- `11` = CORS / session triage / blind SSRF (Interactsh)
 
-For direct `pentest`, supported skip values are `1` through `10`.
+For direct `pentest`, supported skip values are `1` through `11`.
 
 ## Notes
 

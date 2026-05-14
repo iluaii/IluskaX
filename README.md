@@ -430,6 +430,10 @@ Runs after SQLMap:
 - **Session**: on login-like paths, compares session cookies between two unauthenticated GETs (stable value → informational fixation hint) and notes session-like cookies on HTTPS without `SameSite=Strict`.
 - **SSRF**: for URLs with “URL-like” query parameters, injects a unique per-probe **Interactsh** hostname (`https://…oast…`) and polls for HTTP/DNS callbacks. Controlled by `-oast-server` (default public ProjectDiscovery hosts), `-oast-token`, and `-oast-poll-seconds`. Use `-skip-phase 11` or `-oast-server ""` if outbound OAST must be disabled.
 
+### Phase 12: IDOR surface (static)
+
+Runs after phase 11. This pass is **read-only**: it inspects crawl URLs locally for patterns that often warrant manual insecure-direct-object-reference review (numeric or UUID-like path segments after REST-style resource names, `*_id` / known object query keys, numeric `id=` values). It does **not** substitute other users’ identifiers or issue extra HTTP requests, so it cannot by itself access foreign objects. Tagged rows appear as informational “IDOR surface” findings in the report.
+
 ## Reports
 
 Default files:

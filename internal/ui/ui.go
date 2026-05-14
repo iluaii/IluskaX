@@ -106,6 +106,7 @@ const (
 	VulnCORS
 	VulnSSRF
 	VulnSession
+	VulnIDOR
 )
 
 func (v VulnType) String() string {
@@ -138,6 +139,8 @@ func (v VulnType) String() string {
 		return "SSRF"
 	case VulnSession:
 		return "Session"
+	case VulnIDOR:
+		return "IDOR"
 	}
 	return "Unknown"
 }
@@ -198,6 +201,8 @@ func (v VulnType) SectionTitle(count int) string {
 		return fmt.Sprintf(" ◈ %s (OAST) (%d found) ", v.String(), count)
 	case VulnSession:
 		return fmt.Sprintf(" ◈ %s / COOKIE (%d found) ", v.String(), count)
+	case VulnIDOR:
+		return fmt.Sprintf(" ◈ %s SURFACE (%d found) ", v.String(), count)
 	default:
 		return fmt.Sprintf(" ◈ %s VULNERABILITIES (%d found) ", v.String(), count)
 	}
@@ -227,6 +232,8 @@ func (v VulnType) SummaryLabel() string {
 		return "SSRF (OAST)"
 	case VulnSession:
 		return "Session / cookies"
+	case VulnIDOR:
+		return "IDOR surface tags"
 	default:
 		return v.String()
 	}
@@ -244,7 +251,7 @@ func (v VulnType) titleColor() string {
 		return colorYellow + colorBold
 	case VulnGraphQL:
 		return colorCyan + colorBold
-	case VulnCORS, VulnSSRF, VulnSession:
+	case VulnCORS, VulnSSRF, VulnSession, VulnIDOR:
 		return colorYellow + colorBold
 	}
 	return colorWhite
@@ -262,7 +269,7 @@ func (v VulnType) rowColor() string {
 		return colorYellow
 	case VulnGraphQL:
 		return colorCyan
-	case VulnCORS, VulnSSRF, VulnSession:
+	case VulnCORS, VulnSSRF, VulnSession, VulnIDOR:
 		return colorYellow
 	}
 	return colorWhite
@@ -280,7 +287,7 @@ func (v VulnType) borderColor() string {
 		return colorYellow
 	case VulnGraphQL:
 		return colorCyan
-	case VulnCORS, VulnSSRF, VulnSession:
+	case VulnCORS, VulnSSRF, VulnSession, VulnIDOR:
 		return colorYellow
 	}
 	return colorWhite
@@ -560,7 +567,7 @@ func PrintFindingsTable(findings []Finding, toTerm bool) string {
 	}
 	var out strings.Builder
 	wroteSection := false
-	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnSSRF, VulnSecret, VulnReflection, VulnExposure, VulnHeader, VulnCookie, VulnCORS, VulnSession, VulnJS, VulnGraphQL} {
+	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnSSRF, VulnSecret, VulnReflection, VulnIDOR, VulnExposure, VulnHeader, VulnCookie, VulnCORS, VulnSession, VulnJS, VulnGraphQL} {
 		fs, ok := byType[vt]
 		if !ok {
 			continue
@@ -685,7 +692,7 @@ func renderTable(vt VulnType, findings []Finding, toTerm bool) string {
 		pCell := padRight(pStr, colPayload)
 
 		rowColor := rc
-		if toTerm && (vt == VulnHeader || vt == VulnCookie || vt == VulnJS || vt == VulnSecret || vt == VulnGraphQL || vt == VulnExposure || vt == VulnReflection || vt == VulnCORS || vt == VulnSSRF || vt == VulnSession) {
+		if toTerm && (vt == VulnHeader || vt == VulnCookie || vt == VulnJS || vt == VulnSecret || vt == VulnGraphQL || vt == VulnExposure || vt == VulnReflection || vt == VulnIDOR || vt == VulnCORS || vt == VulnSSRF || vt == VulnSession) {
 			rowColor = f.Level.color()
 		}
 
@@ -739,7 +746,7 @@ func PrintSummary(findings []Finding, startTime time.Time, toTerm bool) string {
 	vulnTotal := 0
 	warningTotal := 0
 	infoTotal := 0
-	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnSSRF, VulnSecret, VulnReflection, VulnExposure, VulnHeader, VulnCookie, VulnCORS, VulnSession, VulnJS, VulnGraphQL} {
+	for _, vt := range []VulnType{VulnSQLi, VulnXSS, VulnNuclei, VulnRedirect, VulnSSRF, VulnSecret, VulnReflection, VulnIDOR, VulnExposure, VulnHeader, VulnCookie, VulnCORS, VulnSession, VulnJS, VulnGraphQL} {
 		if n := counts[vt]; n > 0 {
 			total += n
 			label := fmt.Sprintf("  %-16s : %d", vt.SummaryLabel(), n)

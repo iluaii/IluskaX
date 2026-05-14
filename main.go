@@ -85,7 +85,7 @@ func main() {
 	cookie := flag.String("cookie", "", "Cookie header for authenticated scanning")
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
-	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-11)")
+	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-12)")
 	scopeFlag := flag.String("scope", "", "Comma-separated extra allowed hosts (supports *.example.com)")
 	denyScopeFlag := flag.String("deny-scope", "", "Comma-separated denied hosts (deny wins, supports *.example.com)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
@@ -466,4 +466,5 @@ func printUsage() {
 	fmt.Println("  9  = Dalfox XSS Scan")
 	fmt.Println("  10 = SQLMap Deep Scan")
 	fmt.Println("  11 = CORS / session triage / blind SSRF (Interactsh)")
+	fmt.Println("  12 = IDOR surface (static URL heuristics, no extra HTTP)")
 }

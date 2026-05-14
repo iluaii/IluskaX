@@ -7,7 +7,7 @@
 | Что | Где |
 |-----|-----|
 | Реализация HTTP/CLI/TUI вывода фазы | `internal/modules/<имя>.go` |
-| Порядок фаз pentest 1–11, skip, тайминги | `internal/modules/pentest_pipeline.go` |
+| Порядок фаз pentest 1–12, skip, тайминги | `internal/modules/pentest_pipeline.go` |
 | Маркеры `[PHASE …]` для парсинга логов дашборда | `internal/phasemarkers/markers.go` |
 | Флаги pentest | `cmd/pentest/main1.go` |
 | Флаги crawl + передача в дочерний pentest | `main.go` |
@@ -15,7 +15,7 @@
 
 Пакет `internal/phasemarkers` не импортирует `internal/ui` и `internal/modules` — так нет циклических импортов. Любой новый маркер фазы в логе добавляйте туда же.
 
-## Контракт модуля pentest (фазы 1–11)
+## Контракт модуля pentest (фазы 1–12)
 
 1. **Поток вывода**  
    Пишите заголовок фазы в `w` (`io.Writer`), как сейчас: строка с подстрокой вида `[PHASE N] …` (совпадает с одним из маркеров в `phasemarkers.PentestLogPhaseMarkers()`). Для веток без работы тоже логируйте `[PHASE N]`, иначе TUI не увидит смену фазы по файлу лога.

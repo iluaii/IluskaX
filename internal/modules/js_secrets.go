@@ -58,6 +58,9 @@ func JSSecretScan(urls []string, w io.Writer, cookie string, limiter <-chan time
 		if looksJavaScriptURL(pageURL) || strings.Contains(strings.ToLower(contentType), "javascript") {
 			sources = append(sources, jsSecretSource{url: pageURL, body: body})
 		} else {
+			if looksSecretBearingResponse(pageURL, contentType, body) {
+				sources = append(sources, jsSecretSource{url: pageURL, body: body})
+			}
 			sources = append(sources, extractJSSources(client, pageURL, body, cookie, limiter, guard, seenScripts)...)
 		}
 
@@ -201,4 +204,17 @@ func looksJavaScriptURL(raw string) bool {
 		return false
 	}
 	return strings.HasSuffix(strings.ToLower(parsed.Path), ".js")
+}
+
+func looksSecretBearingResponse(raw, contentType, body string) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "json") || strings.Contains(ct, "text/plain") {
+		return true
+	}
+	parsed, err := url.Parse(raw)
+	if err == nil && strings.Contains(strings.ToLower(parsed.Path), "/api/") && !strings.Contains(ct, "text/html") {
+		return true
+	}
+	trimmed := strings.TrimSpace(body)
+	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
 }

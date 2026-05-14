@@ -179,31 +179,35 @@ func (m model) renderFindings(width int, detail bool) string {
 		}
 		return sb.String()
 	}
-	filtered := filteredFindings(m)
-	sb.WriteString(colorDim + fmt.Sprintf("Filter: %s", findingFilterLabel(m.findingFilter)) + colorReset)
+	filterLine := colorDim + fmt.Sprintf("Filter: %s", findingFilterLabel(m.findingFilter)) + colorReset
 	if strings.TrimSpace(m.findingQuery) != "" {
-		sb.WriteString(colorDim + " | Search: " + m.findingQuery + colorReset)
+		filterLine += colorDim + " | Search: " + m.findingQuery + colorReset
 	}
-	sb.WriteString("\n")
-	if len(filtered) == 0 {
+	sb.WriteString(filterLine + "\n")
+	lines := findingLines(m, width)
+	if len(lines) == 0 {
 		sb.WriteString("No findings yet.\n")
 		return sb.String()
 	}
-	for _, item := range filtered {
-		levelColor := colorCyan
-		switch item.level {
-		case "vulnerability":
-			levelColor = colorRed
-		case "warning":
-			levelColor = colorYellow
+
+	maxRows := m.height - 10
+	if maxRows < 6 {
+		maxRows = 6
+	}
+	start := 0
+	if len(lines) > maxRows {
+		maxScroll := len(lines) - maxRows
+		if m.scroll > maxScroll {
+			m.scroll = maxScroll
 		}
-		sb.WriteString(fmt.Sprintf("%s[%s]%s %s %s\n", levelColor, strings.ToUpper(item.level), colorReset, item.kind, item.url))
-		if item.payload != "" {
-			sb.WriteString("  " + shorten(item.payload, maxInt(30, width-8)) + "\n")
-		}
-		if item.detail != "" {
-			sb.WriteString("  " + colorDim + item.detail + colorReset + "\n")
-		}
+		start = m.scroll
+	}
+	end := minInt(len(lines), start+maxRows)
+	for _, line := range lines[start:end] {
+		sb.WriteString(line + "\n")
+	}
+	if len(lines) > maxRows {
+		sb.WriteString(colorDim + fmt.Sprintf("Showing %d-%d of %d lines", start+1, end, len(lines)) + colorReset + "\n")
 	}
 	return sb.String()
 }

@@ -61,6 +61,47 @@ func findingFilterLabel(filter findingFilter) string {
 	}
 }
 
+func findingLines(m model, width int) []string {
+	filtered := filteredFindings(m)
+	lines := make([]string, 0, len(filtered)*3+1)
+	if len(filtered) == 0 {
+		lines = append(lines, "No findings yet.")
+		return lines
+	}
+	for i, item := range filtered {
+		levelColor := colorCyan
+		switch item.level {
+		case "vulnerability":
+			levelColor = colorRed
+		case "warning":
+			levelColor = colorYellow
+		}
+		lines = append(lines, fmt.Sprintf("%s[%s]%s %s %s", levelColor, strings.ToUpper(item.level), colorReset, item.kind, item.url))
+		if item.payload != "" {
+			lines = append(lines, "  "+shorten(item.payload, maxInt(30, width-8)))
+		}
+		if item.detail != "" {
+			lines = append(lines, "  "+colorDim+item.detail+colorReset)
+		}
+		if i != len(filtered)-1 {
+			lines = append(lines, "")
+		}
+	}
+	return lines
+}
+
+func (m model) findingsMaxScroll(width int) int {
+	maxRows := m.height - 10
+	if maxRows < 6 {
+		maxRows = 6
+	}
+	lines := findingLines(m, width)
+	if len(lines) <= maxRows {
+		return 0
+	}
+	return len(lines) - maxRows
+}
+
 func (m model) totalVulns() int {
 	total := 0
 	for _, scan := range m.scans {

@@ -38,9 +38,9 @@ var sessionCookieNames = []string{
 }
 
 type OASTOptions struct {
-	ServerURL   string // comma-separated, e.g. "oast.pro,oast.live"; empty skips OAST
-	Token       string // optional auth for private servers
-	PollSeconds int    // time to wait for callbacks after probes
+	ServerURL   string
+	Token       string
+	PollSeconds int
 }
 
 func CorsSessionSSRFScan(urls, paramURLs []string, cookie string, oast OASTOptions, w io.Writer, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
@@ -54,6 +54,7 @@ func CorsSessionSSRFScan(urls, paramURLs []string, cookie string, oast OASTOptio
 
 	corsReflectScan(hosts, cookie, w, limiter, sb, rc)
 	sessionTriageScan(urls, cookie, w, limiter, sb, rc)
+	ssrfDirectEchoScan(paramURLs, cookie, w, limiter, sb, rc)
 
 	if strings.TrimSpace(oast.ServerURL) == "" {
 		msg := "├─ [OAST] Skipped (set -oast-server to enable blind SSRF, e.g. oast.pro,oast.live)\n"
@@ -300,7 +301,7 @@ func ssrfOASTScan(paramURLs []string, cookie string, oast OASTOptions, w io.Writ
 		_ = ic.Close()
 	}()
 
-	var pending sync.Map // host label -> probe description
+	var pending sync.Map
 	var seenID sync.Map
 
 	if err := ic.StartPolling(2*time.Second, func(it *server.Interaction) {
@@ -393,6 +394,74 @@ outer:
 		fmt.Fprint(w, msg)
 	}
 	time.Sleep(time.Duration(poll) * time.Second)
+}
+
+func ssrfDirectEchoScan(paramURLs []string, cookie string, w io.Writer, limiter <-chan time.Time, sb *ui.StatusBar, rc *ui.ReportCollector) {
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	probes := 0
+	const maxProbes = 60
+
+outer:
+	for _, raw := range paramURLs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			continue
+		}
+		q := u.Query()
+		for key := range q {
+			if !ssrfParamNameMatch(key) {
+				continue
+			}
+			if probes >= maxProbes {
+				break outer
+			}
+
+			payload := (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}).String()
+			u2 := *u
+			q2 := u2.Query()
+			q2.Set(key, payload)
+			u2.RawQuery = q2.Encode()
+			target := u2.String()
+
+			<-limiter
+			req, err := http.NewRequest("GET", target, nil)
+			if err != nil {
+				continue
+			}
+			ApplyHeaders(req, cookie)
+			resp, err := httpClient.Do(req)
+			if err != nil || resp == nil {
+				continue
+			}
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			resp.Body.Close()
+			body := string(bodyBytes)
+			probes++
+			lowerBody := strings.ToLower(body)
+			lowerPayload := strings.ToLower(payload)
+			if strings.Contains(lowerBody, "fetched "+lowerPayload) || (strings.Contains(lowerBody, "fetch") && strings.Contains(lowerBody, lowerPayload) && strings.Contains(lowerBody, "status=")) {
+				msg := fmt.Sprintf("│  [SSRF] %s fetched same-origin probe via %s\n", ui.Red(ui.Truncate(raw, ui.MaxURLLen)), key)
+				logPhaseLine(w, sb, msg)
+				if rc != nil {
+					rc.AddFinding(ui.Finding{
+						Type:    ui.VulnSSRF,
+						Level:   ui.LevelWarning,
+						URL:     target,
+						Payload: key + "=" + payload,
+						Detail:  "response reflected/fetched scanner-controlled URL; verify SSRF impact manually",
+					})
+				}
+			}
+			if sb != nil {
+				sb.Tick(1)
+			}
+		}
+	}
+
+	if probes > 0 {
+		msg := fmt.Sprintf("├─ [SSRF] Direct echo/fetch probes sent: %d\n", probes)
+		logPhaseLine(w, sb, msg)
+	}
 }
 
 func logPhaseLine(w io.Writer, sb *ui.StatusBar, msg string) {

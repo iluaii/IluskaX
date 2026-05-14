@@ -177,7 +177,7 @@ func isObjectIDToken(seg string) bool {
 	if idorPathUUID.MatchString(seg) {
 		return true
 	}
-	if isAllDigits(seg) && len(seg) >= 1 && len(seg) <= 19 {
+	if isAllDigits(seg) && len(seg) >= 1 && len(seg) <= 6 {
 		return true
 	}
 	return false

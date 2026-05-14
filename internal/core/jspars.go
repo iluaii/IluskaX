@@ -25,16 +25,17 @@ type JSSignature struct {
 }
 
 var (
-	reStrPath     = regexp.MustCompile(`["'](/[a-zA-Z0-9_\-/]{2,}(?:\?[a-zA-Z0-9_\-=&]*)?)["']`)
-	reFetchQuoted = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*[\"']([^\"'`]+)[\"']")
-	reFetchTmpl   = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*`([^`]+)`")
-	reXHR         = regexp.MustCompile(`\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["']([^"']+)["']`)
-	reAxiosConfig = regexp.MustCompile(`(?is)axios\s*\(\s*\{.{0,900}?url\s*:\s*["']([^"']+)["']`)
-	reAjaxConfig  = regexp.MustCompile(`(?is)\$\.ajax\s*\(\s*\{.{0,900}?url\s*:\s*["']([^"']+)["']`)
-	reJQueryGet   = regexp.MustCompile(`\$\.(?:get|getJSON)\s*\(\s*["']([^"']+)["']`)
-	reParam       = regexp.MustCompile(`[?&]([a-zA-Z_][a-zA-Z0-9_]*)=`)
-	reTemplateVar = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
-	reAPIVar      = regexp.MustCompile(`(?i)(?:apiUrl|api_url|endpoint|baseURL|base_url|apiPath|api_path|path)\s*=\s*["']([^"']+)["']`)
+	reStrPath      = regexp.MustCompile(`["'](/[a-zA-Z0-9_\-/]{2,}(?:\?[a-zA-Z0-9_\-=&]*)?)["']`)
+	reFetchQuoted  = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*[\"']([^\"'`]+)[\"']")
+	reFetchTmpl    = regexp.MustCompile("(?:fetch|axios\\.(?:get|post|put|patch|delete)|http\\.(?:get|post|put|patch|delete))\\s*\\(\\s*`([^`]+)`")
+	reXHR          = regexp.MustCompile(`\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["']([^"']+)["']`)
+	reAxiosConfig  = regexp.MustCompile(`(?is)axios\s*\(\s*\{.{0,900}?url\s*:\s*["']([^"']+)["']`)
+	reAjaxConfig   = regexp.MustCompile(`(?is)\$\.ajax\s*\(\s*\{.{0,900}?url\s*:\s*["']([^"']+)["']`)
+	reJQueryGet    = regexp.MustCompile(`\$\.(?:get|getJSON)\s*\(\s*["']([^"']+)["']`)
+	reParam        = regexp.MustCompile(`[?&]([a-zA-Z_][a-zA-Z0-9_]*)=`)
+	reTemplateExpr = regexp.MustCompile(`\$\{[^}]+\}`)
+	reTemplateVar  = regexp.MustCompile(`[a-zA-Z_][a-zA-Z0-9_.]*`)
+	reAPIVar       = regexp.MustCompile(`(?i)(?:apiUrl|api_url|endpoint|baseURL|base_url|apiPath|api_path|path)\s*=\s*["']([^"']+)["']`)
 
 	jsSkipExts = []string{".png", ".jpg", ".gif", ".svg", ".css", ".woff", ".ico", "data:"}
 )
@@ -316,18 +317,24 @@ func parseJSBody(body, sourceURL string, base *url.URL) []JSEndpoint {
 	}
 	for _, m := range reFetchTmpl.FindAllStringSubmatch(body, -1) {
 		raw := m[1]
-		varMatches := reTemplateVar.FindAllStringSubmatch(raw, -1)
+		varMatches := reTemplateExpr.FindAllString(raw, -1)
 		var extraParams []string
-		for _, vm := range varMatches {
-			name := vm[1]
-			if idx := strings.IndexAny(name, ".("); idx != -1 {
-				name = name[:idx]
-			}
-			if name != "" {
-				extraParams = append(extraParams, name)
+		for _, expr := range varMatches {
+			inner := strings.TrimSuffix(strings.TrimPrefix(expr, "${"), "}")
+			names := reTemplateVar.FindAllString(inner, -1)
+			for _, name := range names {
+				if name == "" || name == "encodeURIComponent" || name == "encodeURI" || name == "String" {
+					continue
+				}
+				if idx := strings.Index(name, "."); idx != -1 {
+					name = name[:idx]
+				}
+				if name != "" {
+					extraParams = append(extraParams, name)
+				}
 			}
 		}
-		clean := reTemplateVar.ReplaceAllString(raw, "1")
+		clean := reTemplateExpr.ReplaceAllString(raw, "1")
 		ref, err := url.Parse(clean)
 		if err != nil {
 			continue

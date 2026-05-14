@@ -167,6 +167,16 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "up", "k":
+		if currentFindingsView(m) && !m.findingSearch {
+			maxScroll := m.findingsMaxScroll(m.width)
+			if m.scroll > 0 {
+				m.scroll--
+			}
+			if m.scroll > maxScroll {
+				m.scroll = maxScroll
+			}
+			return m, nil
+		}
 		if m.inDetail {
 			if m.detailTab == detailLogs {
 				maxScroll := m.logMaxScroll()
@@ -190,6 +200,13 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "down", "j":
+		if currentFindingsView(m) && !m.findingSearch {
+			maxScroll := m.findingsMaxScroll(m.width)
+			if m.scroll < maxScroll {
+				m.scroll++
+			}
+			return m, nil
+		}
 		if m.inDetail {
 			if m.detailTab == detailLogs {
 				maxScroll := m.logMaxScroll()
@@ -213,6 +230,39 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus++
 		}
 		return m, nil
+	case "pgup", "pageup":
+		if currentFindingsView(m) && !m.findingSearch {
+			maxScroll := m.findingsMaxScroll(m.width)
+			step := maxInt(1, m.height/2)
+			m.scroll -= step
+			if m.scroll < 0 {
+				m.scroll = 0
+			}
+			if m.scroll > maxScroll {
+				m.scroll = maxScroll
+			}
+			return m, nil
+		}
+	case "pgdn", "pagedown":
+		if currentFindingsView(m) && !m.findingSearch {
+			maxScroll := m.findingsMaxScroll(m.width)
+			step := maxInt(1, m.height/2)
+			m.scroll += step
+			if m.scroll > maxScroll {
+				m.scroll = maxScroll
+			}
+			return m, nil
+		}
+	case "home":
+		if currentFindingsView(m) && !m.findingSearch {
+			m.scroll = 0
+			return m, nil
+		}
+	case "end":
+		if currentFindingsView(m) && !m.findingSearch {
+			m.scroll = m.findingsMaxScroll(m.width)
+			return m, nil
+		}
 	case "enter":
 		if m.globalTab == tabDashboard && !m.inDetail && len(m.scans) > 0 {
 			m.inDetail = true
@@ -267,6 +317,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "3":
 				m.findingFilter = filterInfo
 			}
+			m.scroll = 0
 			return m, nil
 		}
 	case "x":

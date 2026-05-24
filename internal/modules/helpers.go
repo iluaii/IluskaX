@@ -110,6 +110,55 @@ func IsPhaseSkipped(phase string, skipPhases []string) bool {
 	return false
 }
 
+func ParsePhaseList(raw string) []string {
+	var phases []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		phases = append(phases, p)
+	}
+	return phases
+}
+
+func PentestPhaseIDs() []string {
+	return []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"}
+}
+
+func BuildPentestSkipPhases(skipRaw, onlyRaw string) []string {
+	skipPhases := ParsePhaseList(skipRaw)
+	onlyPhases := ParsePhaseList(onlyRaw)
+	if len(onlyPhases) == 0 {
+		return skipPhases
+	}
+
+	only := map[string]bool{}
+	for _, phase := range onlyPhases {
+		only[phase] = true
+	}
+
+	combined := make([]string, 0, len(PentestPhaseIDs())+len(skipPhases))
+	seen := map[string]bool{}
+	for _, phase := range PentestPhaseIDs() {
+		if only[phase] {
+			continue
+		}
+		combined = append(combined, phase)
+		seen[phase] = true
+	}
+	for _, phase := range skipPhases {
+		if seen[phase] {
+			continue
+		}
+		combined = append(combined, phase)
+		seen[phase] = true
+	}
+	return combined
+}
+
 func IsStaticAsset(path string) bool {
 	staticExts := []string{
 		".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",

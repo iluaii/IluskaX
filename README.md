@@ -141,6 +141,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-burp` | empty | Path to Burp request file for SQLMap |
 | `-skip` | empty | Comma-separated path patterns to skip during crawl |
 | `-skip-phase` | empty | Comma-separated phases to skip |
+| `-phaseo` | empty | Comma-separated pentest phases to run exclusively |
 | `-timeout` | `0` | Total crawl timeout in minutes, `0 = no limit` |
 | `-o` | empty | Output report path |
 | `-json-out` | empty | Output JSON report path |
@@ -163,6 +164,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-scope` | empty | Extra allowed hosts, comma-separated; supports `*.example.com` |
 | `-deny-scope` | empty | Denied hosts, comma-separated; deny wins and supports `*.example.com` |
 | `-skip-phase` | empty | Comma-separated phases to skip |
+| `-phaseo` | empty | Comma-separated phases to run exclusively |
 | `-sqlmap-level` | `0` | SQLMap starting level, `0 = auto` |
 | `-sqlmap-risk` | `0` | SQLMap starting risk, `0 = auto` |
 | `-cookie` | empty | Cookie header for authenticated scanning |
@@ -240,7 +242,7 @@ External tool rate limiting is applied to:
 
 ## GraphQL Scan
 
-Pentest phase `6` performs safe GraphQL checks:
+Pentest phase `4` performs safe GraphQL checks:
 
 - endpoint discovery from crawled URLs plus common paths such as `/graphql`, `/api`, `/api/graphql`, `/query`, `/gql`, and API prefixes inferred from crawled paths
 - manual endpoint injection with `-graphql-endpoint`, useful for PortSwigger labs with hidden paths such as `/graphql/v1`
@@ -557,6 +559,13 @@ Example:
 ./luska -u https://example.com -ps -skip-phase 2,4
 ```
 
+To run only specific pentest phases, use `-phaseo`:
+
+```bash
+./luska -u https://example.com -ps -phaseo 4
+./pentest -f 'output/example.com|2026-04-08_11-30-00.txt' -host example.com -phaseo 4,7
+```
+
 Phase mapping:
 
 - `0` = subdomain enumeration
@@ -572,8 +581,9 @@ Phase mapping:
 - `9` = dalfox
 - `10` = SQLMap
 - `11` = CORS / session triage / blind SSRF (Interactsh)
+- `12` = IDOR surface (static URL heuristics, no extra HTTP)
 
-For direct `pentest`, supported skip values are `1` through `11`.
+For direct `pentest`, supported phase values are `1` through `12`.
 
 ## Notes
 

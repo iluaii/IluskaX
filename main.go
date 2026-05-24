@@ -47,6 +47,49 @@ func (m *multiFlag) Set(val string) error {
 	*m = append(*m, val)
 	return nil
 }
+
+func withSubdomainScope(scopeList, host string) string {
+	host = discoveryHost(host)
+	if host == "" {
+		return strings.TrimSpace(scopeList)
+	}
+	subdomainRule := "*." + host
+	for _, item := range strings.Split(scopeList, ",") {
+		if strings.TrimSpace(strings.ToLower(item)) == subdomainRule {
+			return scopeList
+		}
+	}
+	if strings.TrimSpace(scopeList) == "" {
+		return subdomainRule
+	}
+	return scopeList + "," + subdomainRule
+}
+
+func discoveryHost(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(raw); err == nil && parsed.Hostname() != "" {
+		raw = parsed.Hostname()
+	}
+	if parsed, err := url.Parse("//" + raw); err == nil && parsed.Hostname() != "" {
+		raw = parsed.Hostname()
+	}
+	if idx := strings.IndexAny(raw, "/?#"); idx != -1 {
+		raw = raw[:idx]
+	}
+	raw = strings.Trim(raw, "[] ")
+	raw = strings.TrimSuffix(raw, ".")
+	return strings.TrimPrefix(raw, "www.")
+}
+
+func isSameOrSubdomain(host, root string) bool {
+	host = discoveryHost(host)
+	root = discoveryHost(root)
+	return host == root || strings.HasSuffix(host, "."+root)
+}
+
 func printBanner() {
 	banner := []string{
 		"",
@@ -86,6 +129,7 @@ func main() {
 	burpFile := flag.String("burp", "", "Path to Burp request file for SQLMap")
 	skipFlag := flag.String("skip", "", "Comma-separated path patterns to skip")
 	skipPhases := flag.String("skip-phase", "", "Comma-separated phases to skip (0-12)")
+	phaseOnly := flag.String("phaseo", "", "Comma-separated pentest phases to run exclusively (1-12)")
 	scopeFlag := flag.String("scope", "", "Comma-separated extra allowed hosts (supports *.example.com)")
 	denyScopeFlag := flag.String("deny-scope", "", "Comma-separated denied hosts (deny wins, supports *.example.com)")
 	crawlTimeout := flag.Int("timeout", 0, "Total crawl timeout in minutes (0 = no limit)")
@@ -134,7 +178,11 @@ func main() {
 		fmt.Printf("ERROR: Invalid URL: %v\n", err)
 		return
 	}
-	scopeGuard := core.NewScopeGuard(parsed.Hostname(), *scopeFlag, *denyScopeFlag)
+	allowScope := *scopeFlag
+	if *subdomains {
+		allowScope = withSubdomainScope(allowScope, parsed.Hostname())
+	}
+	scopeGuard := core.NewScopeGuard(parsed.Hostname(), allowScope, *denyScopeFlag)
 	if !scopeGuard.InScope(*targetURL) {
 		fmt.Printf("ERROR: Target is denied by scope guard: %s\n", *targetURL)
 		return
@@ -209,11 +257,15 @@ func main() {
 		if len(found) > 0 {
 			var scoped []string
 			for _, sub := range found {
-				if scopeGuard.InScope("https://" + sub) {
-					scoped = append(scoped, sub)
-				} else {
+				if !isSameOrSubdomain(sub, parsed.Hostname()) {
 					fmt.Fprintf(session.Writer("subdomain"), "├─ [SCOPE] skipped out-of-scope subdomain: %s\n", sub)
+					continue
 				}
+				if *denyScopeFlag != "" && !scopeGuard.InScope("https://"+discoveryHost(sub)) {
+					fmt.Fprintf(session.Writer("subdomain"), "├─ [SCOPE] skipped denied subdomain: %s\n", sub)
+					continue
+				}
+				scoped = append(scoped, sub)
 			}
 			found = scoped
 		}
@@ -362,8 +414,11 @@ func main() {
 		if *skipPhases != "" {
 			pentestArgs = append(pentestArgs, "-skip-phase", *skipPhases)
 		}
-		if *scopeFlag != "" {
-			pentestArgs = append(pentestArgs, "-scope", *scopeFlag)
+		if *phaseOnly != "" {
+			pentestArgs = append(pentestArgs, "-phaseo", *phaseOnly)
+		}
+		if allowScope != "" {
+			pentestArgs = append(pentestArgs, "-scope", allowScope)
 		}
 		if *denyScopeFlag != "" {
 			pentestArgs = append(pentestArgs, "-deny-scope", *denyScopeFlag)
@@ -425,7 +480,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-skip-phase <phases>] [-phaseo <phases>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
@@ -441,6 +496,8 @@ func printUsage() {
 	fmt.Println("  -cookie        Cookie for authenticated scanning")
 	fmt.Println("-cookiefile    Path to file with cookie header value (overrides -cookie)")
 	fmt.Println("  -burp          Path to Burp request file for SQLMap")
+	fmt.Println("  -skip-phase    Pentest phases to skip, comma-separated")
+	fmt.Println("  -phaseo        Run only these pentest phases, comma-separated (e.g. -phaseo 4 or -phaseo 4,7)")
 	fmt.Println("  -timeout       Total crawl timeout in minutes (default: no limit)")
 	fmt.Println("  -o             Output report file (sitemap + vulnerability tables)")
 	fmt.Println("  -json-out      Output JSON report file")
@@ -452,7 +509,7 @@ func printUsage() {
 	fmt.Println("  -oast-poll-seconds OAST poll duration (default 40)")
 	fmt.Println("  -ui            UI mode: cli|tui (default: cli)")
 	fmt.Println()
-	fmt.Println("Phases (for -skip-phase):")
+	fmt.Println("Phases (for -skip-phase / -phaseo):")
 	fmt.Println("  0  = Subdomain Enumeration (subfinder)")
 	fmt.Println("  0.1 = httpx probe (auto after phase 0)")
 	fmt.Println("  1  = Header & Cookie Analysis")

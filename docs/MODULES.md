@@ -32,8 +32,8 @@
 5. **Заголовки**  
    Глобальные кастомные заголовки задаются через `modules.SetCustomHeaders` в `main` / pentest `main`; внутри модуля обычно достаточно общего HTTP-клиента проекта.
 
-6. **Skip**  
-   В `pentest_pipeline.go` фаза участвует через `IsPhaseSkipped("<id>", skipPhases)`. ID — строка, как в `-skip-phase` (например `"4"` для GraphQL).
+6. **Skip / phase only**  
+   В `pentest_pipeline.go` фаза участвует через `IsPhaseSkipped("<id>", skipPhases)`. ID — строка, как в `-skip-phase` / `-phaseo` (например `"4"` для GraphQL). `-phaseo` преобразуется в список skip-фаз до запуска pipeline.
 
 ## Что сделать при добавлении новой фазы
 
@@ -65,6 +65,7 @@
   `go build -o luska ./main.go`  
   `./luska -u https://target -ps`
 - Пропуск фазы: `-skip-phase 3` или список `2,4,7`.
+- Запуск только выбранных фаз: `-phaseo 4` или список `4,7`.
 
 ## UI
 

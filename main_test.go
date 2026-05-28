@@ -46,3 +46,18 @@ func TestIsSameOrSubdomainNormalizesDiscoveryHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestSitemapURLForAliveSubdomainMatchesCrawlFileEntry(t *testing.T) {
+	tests := map[string]string{
+		"https://api.example.com":  "https://api.example.com/",
+		"https://api.example.com/": "https://api.example.com/",
+		"  http://dev.example.com": "http://dev.example.com/",
+		"":                         "",
+	}
+
+	for raw, want := range tests {
+		if got := sitemapURLForAliveSubdomain(raw); got != want {
+			t.Fatalf("sitemapURLForAliveSubdomain(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

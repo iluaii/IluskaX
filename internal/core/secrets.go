@@ -19,6 +19,7 @@ type secretPattern struct {
 	kind       string
 	re         *regexp.Regexp
 	valueGroup int
+	mask       bool
 	level      ui.FindingLevel
 	detail     string
 }
@@ -28,6 +29,7 @@ var secretPatterns = []secretPattern{
 		kind:       "AWS access key",
 		re:         regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`),
 		valueGroup: 0,
+		mask:       false,
 		level:      ui.LevelWarning,
 		detail:     "AWS-style access key id in client-side code",
 	},
@@ -35,6 +37,7 @@ var secretPatterns = []secretPattern{
 		kind:       "AWS secret key",
 		re:         regexp.MustCompile(`(?i)\b(aws_secret_access_key|awsSecretAccessKey)\b\s*[:=]\s*["'\x60]([A-Za-z0-9/+=]{32,})["'\x60]`),
 		valueGroup: 2,
+		mask:       true,
 		level:      ui.LevelVulnerability,
 		detail:     "AWS secret access key style value in client-side code",
 	},
@@ -42,6 +45,7 @@ var secretPatterns = []secretPattern{
 		kind:       "GitHub token",
 		re:         regexp.MustCompile(`\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,}\b`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelVulnerability,
 		detail:     "GitHub token format in client-side code",
 	},
@@ -49,6 +53,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Google API key",
 		re:         regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}\b`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Google API key format in client-side code",
 	},
@@ -56,6 +61,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Slack token",
 		re:         regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z-]{20,}\b`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelVulnerability,
 		detail:     "Slack token format in client-side code",
 	},
@@ -63,6 +69,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Stripe secret key",
 		re:         regexp.MustCompile(`\bsk_(?:live|test)_[0-9A-Za-z]{20,}\b`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelVulnerability,
 		detail:     "Stripe secret key format in client-side code",
 	},
@@ -70,6 +77,7 @@ var secretPatterns = []secretPattern{
 		kind:       "JWT",
 		re:         regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "JWT-like token in client-side code",
 	},
@@ -77,6 +85,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Bearer token",
 		re:         regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9._~+/=-]{16,})`),
 		valueGroup: 1,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Bearer token literal in client-side code",
 	},
@@ -84,6 +93,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Authorization header",
 		re:         regexp.MustCompile(`(?i)\bauthorization\b\s*[:=]\s*["'\x60]([^"'\x60]{12,})["'\x60]`),
 		valueGroup: 1,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Authorization header value in client-side code",
 	},
@@ -91,6 +101,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Webhook URL",
 		re:         regexp.MustCompile(`(?i)\bhttps://hooks\.(?:slack|zapier)\.com/[^\s"'\x60<>]+`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Webhook URL in client-side code",
 	},
@@ -98,6 +109,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Discord webhook",
 		re:         regexp.MustCompile(`(?i)\bhttps://(?:discord(?:app)?\.com)/api/webhooks/[0-9]{10,}/[A-Za-z0-9_-]{30,}`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Discord webhook URL in client-side code",
 	},
@@ -105,6 +117,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Webhook-like URL",
 		re:         regexp.MustCompile(`(?i)\bhttps?://[^\s"'\x60<>]{1,160}/(?:webhook|collect|gate|grab|steal|logger|log)[^\s"'\x60<>]*`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Webhook or collection URL in client-side code",
 	},
@@ -112,6 +125,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Telegram bot token",
 		re:         regexp.MustCompile(`\b[0-9]{6,}:[A-Za-z0-9_-]{25,}\b`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Telegram bot token format in client-side code",
 	},
@@ -119,6 +133,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Private key",
 		re:         regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 		valueGroup: 0,
+		mask:       true,
 		level:      ui.LevelVulnerability,
 		detail:     "Private key marker in client-side code",
 	},
@@ -126,6 +141,7 @@ var secretPatterns = []secretPattern{
 		kind:       "Named secret",
 		re:         regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|access[_-]?token|auth[_-]?token|client[_-]?secret|app[_-]?secret|secret|password|passwd|pwd)\b\s*[:=]\s*["'\x60]([^"'\x60]{8,})["'\x60]`),
 		valueGroup: 2,
+		mask:       true,
 		level:      ui.LevelWarning,
 		detail:     "Sensitive-looking assignment in client-side code",
 	},
@@ -147,8 +163,11 @@ func FindSecrets(body, sourceURL string) []SecretFinding {
 			if isLikelyPlaceholder(value) {
 				continue
 			}
-			masked := maskSecretValue(value)
-			display := maskSecretInMatch(match[0], value, masked)
+			display := match[0]
+			if pattern.mask {
+				masked := maskSecretValue(value)
+				display = maskSecretInMatch(match[0], value, masked)
+			}
 			key := pattern.kind + "|" + sourceURL + "|" + display
 			if seen[key] {
 				continue

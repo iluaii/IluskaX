@@ -90,6 +90,17 @@ func isSameOrSubdomain(host, root string) bool {
 	return host == root || strings.HasSuffix(host, "."+root)
 }
 
+func sitemapURLForAliveSubdomain(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasSuffix(raw, "/") {
+		return raw
+	}
+	return raw + "/"
+}
+
 func printBanner() {
 	banner := []string{
 		"",
@@ -118,7 +129,8 @@ func main() {
 	maxDepth := flag.Int("rd", 0, "Maximum recursion depth")
 	pentest := flag.Bool("ps", false, "Run pentest scan after crawl")
 	subdomains := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
-	pentestSubdomains := flag.Bool("ps-subdomains", false, "Crawl validated subdomains too so pentest covers them")
+	crawlSubdomains := flag.Bool("crawl-subdomains", false, "Crawl validated subdomains too after subdomain discovery")
+	pentestSubdomains := flag.Bool("ps-subdomains", false, "Deprecated alias for -crawl-subdomains")
 	rateLimit := flag.Int("rate", 10, "Requests per second")
 	extRateLimit := flag.Int("ext-rate", 0, "Requests per second for external tools (0 = no limit)")
 	concurrency := flag.Int("c", 5, "Max concurrent goroutines")
@@ -271,6 +283,11 @@ func main() {
 		}
 		if len(found) > 0 {
 			aliveSubdomains = modules.HTTPXProbe(found, f, session.Writer("httpx"), *extRateLimit, sb)
+			for _, subURL := range aliveSubdomains {
+				if sitemapURL := sitemapURLForAliveSubdomain(subURL); sitemapURL != "" {
+					rc.AddSitemapURL(sitemapURL)
+				}
+			}
 		}
 	}
 
@@ -319,8 +336,9 @@ func main() {
 
 	runCrawl(*targetURL, parsed.Host)
 
-	if *pentestSubdomains && len(aliveSubdomains) > 0 {
-		fmt.Printf("[*] Subdomain pentest enrichment enabled: crawling %d validated subdomains\n", len(aliveSubdomains))
+	shouldCrawlSubdomains := *crawlSubdomains || *pentestSubdomains
+	if shouldCrawlSubdomains && len(aliveSubdomains) > 0 {
+		fmt.Printf("[*] Subdomain crawl enabled: crawling %d validated subdomains\n", len(aliveSubdomains))
 		seenHosts := map[string]bool{
 			parsed.Hostname(): true,
 		}
@@ -341,8 +359,8 @@ func main() {
 			fmt.Printf("[*] Crawling validated subdomain: %s\n", subURL)
 			runCrawl(subURL, subParsed.Host)
 		}
-	} else if *pentestSubdomains && !*subdomains {
-		fmt.Println("[WARN] -ps-subdomains requires -sd; flag ignored")
+	} else if shouldCrawlSubdomains && !*subdomains {
+		fmt.Println("[WARN] -crawl-subdomains requires -sd; flag ignored")
 	}
 
 	var completionSummary strings.Builder
@@ -480,14 +498,15 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-ps-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-skip-phase <phases>] [-phaseo <phases>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-crawl-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-skip-phase <phases>] [-phaseo <phases>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
 	fmt.Println("  -rate          Requests per second (default: 10)")
 	fmt.Println("  -ext-rate      Requests per second for external tools (default: 0 = no limit)")
 	fmt.Println("  -c             Concurrent crawl goroutines (default: 5)")
-	fmt.Println("  -ps-subdomains Crawl validated subdomains too so pentest covers them")
+	fmt.Println("  -crawl-subdomains Crawl validated subdomains too after -sd")
+	fmt.Println("  -ps-subdomains Deprecated alias for -crawl-subdomains")
 	fmt.Println("  -scope         Extra allowed hosts, comma-separated; supports *.example.com")
 	fmt.Println("  -deny-scope    Denied hosts, comma-separated; deny wins; supports *.example.com")
 	fmt.Println("  -ignore-robots Skip robots.txt restrictions")

@@ -54,3 +54,21 @@ func TestFindSecretsDetectsHighConfidenceToken(t *testing.T) {
 		t.Fatal("expected GitHub token finding")
 	}
 }
+
+func TestFindSecretsKeepsAWSAccessKeyIDVisible(t *testing.T) {
+	keyID := "AKIA1234567890ABCDEF"
+	body := `const awsKey = "` + keyID + `";`
+	findings := FindSecrets(body, "app.js")
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].Kind != "AWS access key" {
+		t.Fatalf("unexpected kind: %s", findings[0].Kind)
+	}
+	if !strings.Contains(findings[0].Match, keyID) {
+		t.Fatalf("expected AWS access key id to stay visible, got %q", findings[0].Match)
+	}
+	if strings.Contains(findings[0].Match, "...") {
+		t.Fatalf("expected AWS access key id not to be middle-truncated, got %q", findings[0].Match)
+	}
+}

@@ -104,10 +104,16 @@ If a tool is missing, only the affected phase will fail or be skipped.
 ./luska -u https://example.com -sd -ps -scope '*.example.com'
 ```
 
-### Crawl validated subdomains too before pentest
+### Crawl validated subdomains too
 
 ```bash
-./luska -u https://example.com -sd -ps -ps-subdomains -scope '*.example.com'
+./luska -u https://example.com -sd -crawl-subdomains -scope '*.example.com'
+```
+
+### Crawl validated subdomains and then run pentest
+
+```bash
+./luska -u https://example.com -sd -crawl-subdomains -ps -scope '*.example.com'
 ```
 
 ### Keep a scan inside an explicit scope
@@ -128,7 +134,8 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-rd` | `0` | Maximum recursion depth |
 | `-ps` | `false` | Run pentest after crawl |
 | `-sd` | `false` | Run subdomain enumeration before crawl |
-| `-ps-subdomains` | `false` | Crawl validated subdomains too so pentest covers them |
+| `-crawl-subdomains` | `false` | Crawl validated subdomains too after subdomain discovery |
+| `-ps-subdomains` | `false` | Deprecated alias for `-crawl-subdomains` |
 | `-scope` | empty | Extra allowed hosts, comma-separated; supports `*.example.com` |
 | `-deny-scope` | empty | Denied hosts, comma-separated; deny wins and supports `*.example.com` |
 | `-rate` | `10` | Requests per second for built-in crawl and pentest HTTP probes |
@@ -331,7 +338,7 @@ Runs `httpx` (at `~/go/bin/httpx`) against the subdomains found in phase 0. Only
 
 If `-ext-rate` is set, it is forwarded to `httpx`.
 
-If `-ps-subdomains` is enabled, these validated subdomains are also crawled as separate in-scope targets before the final pentest starts. This gives later pentest phases more than just the root URL for each live subdomain.
+If `-crawl-subdomains` is enabled, these validated subdomains are also crawled as separate in-scope targets. With `-ps`, this gives later pentest phases more than just the root URL for each live subdomain. `-ps-subdomains` is kept as a deprecated alias for compatibility.
 
 ### Phase 1: Header and Cookie Analysis
 

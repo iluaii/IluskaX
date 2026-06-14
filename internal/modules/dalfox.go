@@ -51,16 +51,16 @@ func DalfoxScan(urls []string, w io.Writer, cookie string, extRateLimit int, sb 
 			fmt.Fprintf(w, "├─ [%d/%d] %s\n", i+1, len(urls), testURL)
 		}
 
-		args := []string{"url", testURL, "--follow-redirects"}
+		args := []string{"scan", testURL, "--follow-redirects"}
 		if cookie != "" {
-			args = append(args, "--cookie", cookie)
+			args = append(args, "--cookies", cookie)
 		}
 		if extRateLimit > 0 {
 			delayMS := 1000 / extRateLimit
 			if delayMS < 1 {
 				delayMS = 1
 			}
-			args = append(args, "--worker", "1", "--delay", fmt.Sprintf("%d", delayMS))
+			args = append(args, "--workers", "1", "--delay", fmt.Sprintf("%d", delayMS))
 		}
 		out, err := exec.Command("dalfox", args...).CombinedOutput()
 		outStr := string(out)
@@ -96,6 +96,7 @@ func DalfoxScan(urls []string, w io.Writer, cookie string, extRateLimit int, sb 
 			}
 		} else if err != nil {
 			fmt.Fprintf(w, "│  ? [ERROR] %v\n", err)
+			fmt.Fprintf(w, "│  [DALFOX OUTPUT]: %s\n", strings.ReplaceAll(outStr, "\n", "\n│  "))
 		} else {
 			msg := ui.Dim("  ○ [SAFE]")
 			if sb != nil {

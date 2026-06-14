@@ -7,8 +7,8 @@ import (
 
 func TestIDORSurfaceReasons(t *testing.T) {
 	cases := []struct {
-		raw    string
-		want   []string
+		raw     string
+		want    []string
 		wantNil bool
 	}{
 		{
@@ -23,7 +23,7 @@ func TestIDORSurfaceReasons(t *testing.T) {
 			},
 		},
 		{
-			raw:  "https://cdn.example/static/app.js",
+			raw:     "https://cdn.example/static/app.js",
 			wantNil: true,
 		},
 		{

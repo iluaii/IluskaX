@@ -32,6 +32,74 @@ func TestWithSubdomainScopeDoesNotDuplicateExistingWildcard(t *testing.T) {
 	}
 }
 
+func TestWithSubdomainScopeUsesPatternWhenProvided(t *testing.T) {
+	allowScope := withSubdomainScope("", "example.com", "www.*.example.com")
+
+	if allowScope != "www.*.example.com" {
+		t.Fatalf("expected -sd pattern to be added to scope, got %q", allowScope)
+	}
+}
+
+func TestWithSubdomainScopeUsesWildcardTargetAsPattern(t *testing.T) {
+	allowScope := withSubdomainScope("", "www.*.gogo.com")
+
+	if allowScope != "www.*.gogo.com" {
+		t.Fatalf("expected wildcard target to be used as -sd pattern, got %q", allowScope)
+	}
+}
+
+func TestSubdomainPatternForRunInfersWildcardTarget(t *testing.T) {
+	pattern := subdomainPatternForRun(subdomainFlag{enabled: true}, "www.*.gogo.com")
+
+	if pattern != "www.*.gogo.com" {
+		t.Fatalf("expected wildcard target pattern, got %q", pattern)
+	}
+}
+
+func TestSubdomainEnumHostUsesSuffixAfterWildcard(t *testing.T) {
+	host := subdomainEnumHost("www.*.gogo.com", "www.*.gogo.com")
+
+	if host != "gogo.com" {
+		t.Fatalf("expected subfinder root gogo.com, got %q", host)
+	}
+}
+
+func TestSubdomainEnumHostFallsBackToTargetHost(t *testing.T) {
+	host := subdomainEnumHost("www.gogo.com", "")
+
+	if host != "gogo.com" {
+		t.Fatalf("expected normalized target host gogo.com, got %q", host)
+	}
+}
+
+func TestExpandSubdomainFlagArgsAcceptsSeparatePattern(t *testing.T) {
+	args := expandSubdomainFlagArgs([]string{"luska", "-u", "https://example.com", "-sd", "www.*.example.com", "-ps"})
+	want := []string{"luska", "-u", "https://example.com", "-sd=www.*.example.com", "-ps"}
+
+	if len(args) != len(want) {
+		t.Fatalf("expected %v, got %v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("expected %v, got %v", want, args)
+		}
+	}
+}
+
+func TestExpandSubdomainFlagArgsKeepsDefaultFlag(t *testing.T) {
+	args := expandSubdomainFlagArgs([]string{"luska", "-u", "https://example.com", "-sd", "-ps"})
+	want := []string{"luska", "-u", "https://example.com", "-sd", "-ps"}
+
+	if len(args) != len(want) {
+		t.Fatalf("expected %v, got %v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("expected %v, got %v", want, args)
+		}
+	}
+}
+
 func TestIsSameOrSubdomainNormalizesDiscoveryHosts(t *testing.T) {
 	tests := []string{
 		"api.example.com",
@@ -44,6 +112,18 @@ func TestIsSameOrSubdomainNormalizesDiscoveryHosts(t *testing.T) {
 		if !isSameOrSubdomain(raw, "https://www.example.com") {
 			t.Fatalf("expected %q to match target domain", raw)
 		}
+	}
+}
+
+func TestMatchesSubdomainPattern(t *testing.T) {
+	if !matchesSubdomainPattern("www.dev.example.com", "www.*.example.com") {
+		t.Fatal("expected wildcard label pattern to match")
+	}
+	if matchesSubdomainPattern("api.dev.example.com", "www.*.example.com") {
+		t.Fatal("did not expect different prefix to match")
+	}
+	if matchesSubdomainPattern("www.deep.dev.example.com", "www.*.example.com") {
+		t.Fatal("did not expect wildcard label to span multiple labels")
 	}
 }
 

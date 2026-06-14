@@ -7,6 +7,9 @@ Go-based web security scanner with two binaries:
 
 It can run as a simple CLI scanner or with a Bubble Tea TUI for the pentest phase.
 
+## Demo
+[![Demo](https://asciinema.org/a/Hxg79ft8IaTjLTMq.svg)](https://asciinema.org/a/Hxg79ft8IaTjLTMq)
+
 ## Authorized Use Only
 
 IluskaX is created strictly for:
@@ -104,6 +107,12 @@ If a tool is missing, only the affected phase will fail or be skipped.
 ./luska -u https://example.com -sd -ps -scope '*.example.com'
 ```
 
+Limit subdomain enumeration to a host pattern:
+
+```bash
+./luska -u https://example.com -sd www.*.example.com -ps
+```
+
 ### Crawl validated subdomains too
 
 ```bash
@@ -133,7 +142,7 @@ Note: when `luska` is started with `-ps -ui tui`, the crawl stays in normal CLI 
 | `-r` | `false` | Enable recursive crawl |
 | `-rd` | `0` | Maximum recursion depth |
 | `-ps` | `false` | Run pentest after crawl |
-| `-sd` | `false` | Run subdomain enumeration before crawl |
+| `-sd` | `false` | Run subdomain enumeration before crawl; optional pattern like `www.*.example.com` |
 | `-crawl-subdomains` | `false` | Crawl validated subdomains too after subdomain discovery |
 | `-ps-subdomains` | `false` | Deprecated alias for `-crawl-subdomains` |
 | `-scope` | empty | Extra allowed hosts, comma-separated; supports `*.example.com` |

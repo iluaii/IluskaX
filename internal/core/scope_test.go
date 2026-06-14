@@ -25,6 +25,19 @@ func TestScopeGuardWildcardAndDeny(t *testing.T) {
 	}
 }
 
+func TestScopeGuardAllowsMiddleWildcardPattern(t *testing.T) {
+	guard := NewScopeGuard("example.com", "www.*.example.com", "")
+	if !guard.InScope("https://www.dev.example.com/") {
+		t.Fatal("expected middle wildcard pattern to be in scope")
+	}
+	if guard.InScope("https://api.dev.example.com/") {
+		t.Fatal("did not expect different prefix to match")
+	}
+	if guard.InScope("https://www.deep.dev.example.com/") {
+		t.Fatal("did not expect wildcard label to span multiple labels")
+	}
+}
+
 func TestScopeGuardNormalizesURLsInRules(t *testing.T) {
 	guard := NewScopeGuard("https://example.com:8443/base", "https://api.example.com/v1", "")
 	if !guard.InScope("https://api.example.com/health") {

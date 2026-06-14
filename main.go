@@ -48,12 +48,85 @@ func (m *multiFlag) Set(val string) error {
 	return nil
 }
 
-func withSubdomainScope(scopeList, host string) string {
-	host = discoveryHost(host)
-	if host == "" {
-		return strings.TrimSpace(scopeList)
+type subdomainFlag struct {
+	enabled bool
+	pattern string
+}
+
+func (s *subdomainFlag) String() string {
+	if s == nil || !s.enabled {
+		return "false"
 	}
-	subdomainRule := "*." + host
+	if s.pattern == "" {
+		return "true"
+	}
+	return s.pattern
+}
+
+func (s *subdomainFlag) Set(val string) error {
+	val = strings.TrimSpace(val)
+	if val == "" || strings.EqualFold(val, "true") {
+		s.enabled = true
+		return nil
+	}
+	if strings.EqualFold(val, "false") {
+		s.enabled = false
+		s.pattern = ""
+		return nil
+	}
+	s.enabled = true
+	s.pattern = normalizeSubdomainPattern(val)
+	return nil
+}
+
+func (s *subdomainFlag) IsBoolFlag() bool {
+	return true
+}
+
+func (s subdomainFlag) Enabled() bool {
+	return s.enabled
+}
+
+func (s subdomainFlag) Pattern() string {
+	return s.pattern
+}
+
+func expandSubdomainFlagArgs(args []string) []string {
+	if len(args) < 3 {
+		return args
+	}
+	out := make([]string, 0, len(args))
+	out = append(out, args[0])
+	for i := 1; i < len(args); i++ {
+		if args[i] == "-sd" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			out = append(out, "-sd="+args[i+1])
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
+func withSubdomainScope(scopeList, host string, patterns ...string) string {
+	subdomainRule := ""
+	if len(patterns) > 0 {
+		if pattern := normalizeSubdomainPattern(patterns[0]); pattern != "" {
+			subdomainRule = pattern
+		}
+	}
+	if subdomainRule == "" {
+		if pattern := normalizeSubdomainPattern(host); strings.Contains(pattern, "*") {
+			subdomainRule = pattern
+		}
+	}
+	if subdomainRule == "" {
+		host = discoveryHost(host)
+		if host == "" {
+			return strings.TrimSpace(scopeList)
+		}
+		subdomainRule = "*." + host
+	}
 	for _, item := range strings.Split(scopeList, ",") {
 		if strings.TrimSpace(strings.ToLower(item)) == subdomainRule {
 			return scopeList
@@ -84,10 +157,89 @@ func discoveryHost(raw string) string {
 	return strings.TrimPrefix(raw, "www.")
 }
 
+func normalizeSubdomainPattern(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(raw); err == nil && parsed.Hostname() != "" {
+		raw = parsed.Hostname()
+	}
+	if parsed, err := url.Parse("//" + raw); err == nil && parsed.Hostname() != "" {
+		raw = parsed.Hostname()
+	}
+	if idx := strings.IndexAny(raw, "/?#"); idx != -1 {
+		raw = raw[:idx]
+	}
+	raw = strings.Trim(raw, "[] ")
+	return strings.TrimSuffix(raw, ".")
+}
+
+func subdomainPatternForRun(flag subdomainFlag, targetHost string) string {
+	if pattern := flag.Pattern(); pattern != "" {
+		return pattern
+	}
+	pattern := normalizeSubdomainPattern(targetHost)
+	if strings.Contains(pattern, "*") {
+		return pattern
+	}
+	return ""
+}
+
+func subdomainEnumHost(targetHost, pattern string) string {
+	if suffix := suffixAfterWildcard(pattern); suffix != "" {
+		return suffix
+	}
+	return discoveryHost(targetHost)
+}
+
+func suffixAfterWildcard(pattern string) string {
+	pattern = normalizeSubdomainPattern(pattern)
+	if !strings.Contains(pattern, "*") {
+		return ""
+	}
+	parts := strings.Split(pattern, ".")
+	wildcardIndex := -1
+	for i, part := range parts {
+		if strings.Contains(part, "*") {
+			wildcardIndex = i
+		}
+	}
+	if wildcardIndex == -1 || wildcardIndex+1 >= len(parts) {
+		return ""
+	}
+	return strings.Join(parts[wildcardIndex+1:], ".")
+}
+
 func isSameOrSubdomain(host, root string) bool {
 	host = discoveryHost(host)
 	root = discoveryHost(root)
 	return host == root || strings.HasSuffix(host, "."+root)
+}
+
+func matchesSubdomainPattern(host, pattern string) bool {
+	host = normalizeSubdomainPattern(host)
+	pattern = normalizeSubdomainPattern(pattern)
+	if host == "" || pattern == "" {
+		return false
+	}
+	if !strings.Contains(pattern, "*") {
+		return discoveryHost(host) == discoveryHost(pattern)
+	}
+	hostParts := strings.Split(host, ".")
+	patternParts := strings.Split(pattern, ".")
+	if len(hostParts) != len(patternParts) {
+		return false
+	}
+	for i := range patternParts {
+		if patternParts[i] == "*" {
+			continue
+		}
+		if hostParts[i] != patternParts[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sitemapURLForAliveSubdomain(raw string) string {
@@ -124,11 +276,13 @@ func printBanner() {
 }
 func main() {
 	printBanner()
+	os.Args = expandSubdomainFlagArgs(os.Args)
 	targetURL := flag.String("u", "", "Target URL to crawl")
 	recursive := flag.Bool("r", false, "Enable recursive crawling")
 	maxDepth := flag.Int("rd", 0, "Maximum recursion depth")
 	pentest := flag.Bool("ps", false, "Run pentest scan after crawl")
-	subdomains := flag.Bool("sd", false, "Enable subdomain enumeration before crawl (requires subfinder)")
+	var subdomains subdomainFlag
+	flag.Var(&subdomains, "sd", "Enable subdomain enumeration before crawl; optional host pattern (e.g. -sd or -sd www.*.example.com)")
 	crawlSubdomains := flag.Bool("crawl-subdomains", false, "Crawl validated subdomains too after subdomain discovery")
 	pentestSubdomains := flag.Bool("ps-subdomains", false, "Deprecated alias for -crawl-subdomains")
 	rateLimit := flag.Int("rate", 10, "Requests per second")
@@ -191,10 +345,18 @@ func main() {
 		return
 	}
 	allowScope := *scopeFlag
-	if *subdomains {
-		allowScope = withSubdomainScope(allowScope, parsed.Hostname())
+	subdomainPattern := subdomainPatternForRun(subdomains, parsed.Hostname())
+	subdomainRoot := subdomainEnumHost(parsed.Hostname(), subdomainPattern)
+	targetHasWildcard := strings.Contains(normalizeSubdomainPattern(parsed.Hostname()), "*")
+	rootCrawlTarget := !targetHasWildcard && !(subdomains.Enabled() && subdomainPattern != "")
+	if subdomains.Enabled() {
+		allowScope = withSubdomainScope(allowScope, parsed.Hostname(), subdomainPattern)
 	}
-	scopeGuard := core.NewScopeGuard(parsed.Hostname(), allowScope, *denyScopeFlag)
+	defaultScopeHost := parsed.Hostname()
+	if targetHasWildcard {
+		defaultScopeHost = ""
+	}
+	scopeGuard := core.NewScopeGuard(defaultScopeHost, allowScope, *denyScopeFlag)
 	if !scopeGuard.InScope(*targetURL) {
 		fmt.Printf("ERROR: Target is denied by scope guard: %s\n", *targetURL)
 		return
@@ -261,19 +423,28 @@ func main() {
 	if *crawlTimeout > 0 {
 		fmt.Printf("[*] TIMEOUT: %d minutes\n", *crawlTimeout)
 	}
+	if targetHasWildcard {
+		fmt.Println("[*] WILDCARD TARGET: root crawl skipped; use -crawl-subdomains to crawl matched live hosts")
+	} else if !rootCrawlTarget {
+		fmt.Println("[*] SD PATTERN TARGET: root crawl skipped; use -crawl-subdomains to crawl matched live hosts")
+	}
 	fmt.Println(sep)
 
 	var aliveSubdomains []string
-	if *subdomains {
-		found := modules.SubdomainEnum(parsed.Hostname(), f, session.Writer("subdomain"), *extRateLimit)
+	if subdomains.Enabled() {
+		found := modules.SubdomainEnum(subdomainRoot, f, session.Writer("subdomain"), *extRateLimit)
 		if len(found) > 0 {
 			var scoped []string
 			for _, sub := range found {
-				if !isSameOrSubdomain(sub, parsed.Hostname()) {
+				if !isSameOrSubdomain(sub, subdomainRoot) {
 					fmt.Fprintf(session.Writer("subdomain"), "├─ [SCOPE] skipped out-of-scope subdomain: %s\n", sub)
 					continue
 				}
-				if *denyScopeFlag != "" && !scopeGuard.InScope("https://"+discoveryHost(sub)) {
+				if subdomainPattern != "" && !matchesSubdomainPattern(sub, subdomainPattern) {
+					fmt.Fprintf(session.Writer("subdomain"), "├─ [SCOPE] skipped subdomain outside -sd pattern %s: %s\n", subdomainPattern, sub)
+					continue
+				}
+				if *denyScopeFlag != "" && !scopeGuard.InScope("https://"+normalizeSubdomainPattern(sub)) {
 					fmt.Fprintf(session.Writer("subdomain"), "├─ [SCOPE] skipped denied subdomain: %s\n", sub)
 					continue
 				}
@@ -334,7 +505,9 @@ func main() {
 		f.Sync()
 	}
 
-	runCrawl(*targetURL, parsed.Host)
+	if rootCrawlTarget {
+		runCrawl(*targetURL, parsed.Host)
+	}
 
 	shouldCrawlSubdomains := *crawlSubdomains || *pentestSubdomains
 	if shouldCrawlSubdomains && len(aliveSubdomains) > 0 {
@@ -359,7 +532,7 @@ func main() {
 			fmt.Printf("[*] Crawling validated subdomain: %s\n", subURL)
 			runCrawl(subURL, subParsed.Host)
 		}
-	} else if shouldCrawlSubdomains && !*subdomains {
+	} else if shouldCrawlSubdomains && !subdomains.Enabled() {
 		fmt.Println("[WARN] -crawl-subdomains requires -sd; flag ignored")
 	}
 
@@ -498,9 +671,10 @@ func main() {
 
 func printUsage() {
 	fmt.Println("ERROR: please provide URL with -u flag")
-	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd] [-crawl-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-skip-phase <phases>] [-phaseo <phases>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
+	fmt.Println("Usage: ./luska -u <URL> [-r] [-rd <depth>] [-ps] [-sd [pattern]] [-crawl-subdomains] [-scope <hosts>] [-deny-scope <hosts>] [-skip-phase <phases>] [-phaseo <phases>] [-rate <n>] [-ext-rate <n>] [-c <n>] [-H 'Name: Value'] [-o <report>] [-json-out <report.json>] [-graphql-endpoint <url-or-path>] [-ui <cli|tui>]")
 	fmt.Println()
 	fmt.Println("Flags:")
+	fmt.Println("  -sd            Subdomain enumeration; optional pattern like www.*.example.com (default: *.target)")
 	fmt.Println("  -H             Custom header 'Name: Value' (repeatable, e.g. -H 'X-Bug-Bounty: hunter')")
 	fmt.Println("  -rate          Requests per second (default: 10)")
 	fmt.Println("  -ext-rate      Requests per second for external tools (default: 0 = no limit)")

@@ -47,6 +47,24 @@ go build -o luska ./main.go
 go build -o pentest ./cmd/pentest/main1.go
 ```
 
+## Docker
+
+Build the image (includes all dependencies: subfinder, httpx, nuclei, sqlmap, dalfox):
+
+```bash
+docker build -t iluskax .
+```
+
+Run:
+```bash
+docker run --rm -v $(pwd)/output:/root/output iluskax luska -u https://example.com
+```
+
+With custom headers:
+```bash
+docker run --rm -v $(pwd)/output:/root/output iluskax luska -u https://example.com -H 'X-Bug-Bounty: yourhandle' -ps
+```
+
 ## Requirements
 
 Core crawl logic is pure Go, but some pentest phases rely on external tools in `$PATH` or at specific paths:

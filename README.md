@@ -10,6 +10,20 @@ It can run as a simple CLI scanner or with a Bubble Tea TUI for the pentest phas
 ## Demo
 [![Demo](https://asciinema.org/a/Hxg79ft8IaTjLTMq.svg)](https://asciinema.org/a/Hxg79ft8IaTjLTMq)
 
+## 🎯 Why IluskaX?
+
+Tired of switching between five different tools for web pentesting? 
+
+IluskaX was built because:
+- **You want control** — not some bloated SaaS that costs a kidney
+- **You value your time** — one command instead of manual coordination between scanners
+- **You appreciate clarity** — a beautiful TUI that doesn't make you question your life choices
+- **You need reliability** — the crawl respects scope, the pentest respects your targets
+
+Whether you're bug hunting on HackerOne, learning OWASP Top 10, or securing your own infrastructure, IluskaX gets out of your way and just *works*.
+
+> "Security tools should feel like an extension of your workflow, not a wrestling match with dependency hell."
+
 ## Authorized Use Only
 
 IluskaX is created strictly for:
@@ -265,7 +279,7 @@ Pentest phase `4` performs safe GraphQL checks:
 - safe probing of crawled non-static endpoints because GraphQL is not always hosted on a path named `/graphql`
 - `POST` / `GET` transport probing with `__typename`; when `POST` is blocked, follow-up checks use the GET `query` parameter
 - introspection detection and schema summary for queries, mutations, subscriptions, and types
-- safe alternate introspection probes for blocked raw POST bodies: GET `query`, POST form `query`, compact alias query, `application/graphql`, JSON unicode-escaped introspection token, and newline/comma/comment after `__schema`
+- safe alternate introspection probes for blocked raw POST bodies: GET `query`, POST form `query`, compact alias query, `application/graphql`, JSON unicode-escaped introspection token, and newlin[...]
 - JSON batching detection
 - verbose validation error detection
 
@@ -347,7 +361,7 @@ Runs `httpx` (at `~/go/bin/httpx`) against the subdomains found in phase 0. Only
 
 If `-ext-rate` is set, it is forwarded to `httpx`.
 
-If `-crawl-subdomains` is enabled, these validated subdomains are also crawled as separate in-scope targets. With `-ps`, this gives later pentest phases more than just the root URL for each live subdomain. `-ps-subdomains` is kept as a deprecated alias for compatibility.
+If `-crawl-subdomains` is enabled, these validated subdomains are also crawled as separate in-scope targets. With `-ps`, this gives later pentest phases more than just the root URL for each live [...]
 
 ### Phase 1: Header and Cookie Analysis
 
@@ -372,7 +386,7 @@ When OpenAPI JSON is found, IluskaX extracts path keys and adds those API routes
 
 ### Phase 3: JavaScript Secret Scanner
 
-During the crawl JS parsing step and pentest phase 3, IluskaX scans external and inline JavaScript for common secret formats and sensitive-looking assignments. Detected values are masked before being printed or exported.
+During the crawl JS parsing step and pentest phase 3, IluskaX scans external and inline JavaScript for common secret formats and sensitive-looking assignments. Detected values are masked before b[...]
 
 It currently looks for:
 
@@ -388,15 +402,15 @@ Placeholder-looking values such as `your_api_key_here` are ignored.
 
 ### Phase 4: GraphQL
 
-Safely discovers GraphQL endpoints, checks whether `POST` or GET `query` parameters are accepted, detects enabled introspection, tries safe alternate introspection probes when the basic POST body is blocked, summarizes exposed schema operations, and checks for JSON batching and verbose validation errors.
+Safely discovers GraphQL endpoints, checks whether `POST` or GET `query` parameters are accepted, detects enabled introspection, tries safe alternate introspection probes when the basic POST body[...]
 
-This phase also probes crawled non-static endpoints, because GraphQL can live behind paths such as `/api`, `/gateway`, or `/v1`. Schema artifacts are saved to `Poutput/graphql` by default, or to `-graphql-schema-out` when a single custom JSON file is requested.
+This phase also probes crawled non-static endpoints, because GraphQL can live behind paths such as `/api`, `/gateway`, or `/v1`. Schema artifacts are saved to `Poutput/graphql` by default, or to [...]
 
 This phase does not execute mutations and does not print the schema body to the terminal.
 
 ### Phase 5: Parameter Reflection Map
 
-Builds a lightweight map of reflected query parameters. IluskaX injects a unique harmless marker per parameter and records whether the marker is reflected in HTML text, HTML attributes, URL attributes, script blocks, or escaped output.
+Builds a lightweight map of reflected query parameters. IluskaX injects a unique harmless marker per parameter and records whether the marker is reflected in HTML text, HTML attributes, URL attri[...]
 
 This phase is meant for triage: it helps identify which URLs are interesting for manual XSS or template-injection review without sending exploit payloads.
 
@@ -444,13 +458,13 @@ Supports:
 
 Runs after SQLMap:
 
-- **CORS**: reflects a non-application `Origin` (`https://iluska-cors-probe.invalid` and `null`), checks `OPTIONS` preflight, and flags `Access-Control-Allow-Credentials: true` with `Access-Control-Allow-Origin: *`.
-- **Session**: on login-like paths, compares session cookies between two unauthenticated GETs (stable value → informational fixation hint) and notes session-like cookies on HTTPS without `SameSite=Strict`.
-- **SSRF**: for URLs with “URL-like” query parameters, injects a unique per-probe **Interactsh** hostname (`https://…oast…`) and polls for HTTP/DNS callbacks. Controlled by `-oast-server` (default public ProjectDiscovery hosts), `-oast-token`, and `-oast-poll-seconds`. Use `-skip-phase 11` or `-oast-server ""` if outbound OAST must be disabled.
+- **CORS**: reflects a non-application `Origin` (`https://iluska-cors-probe.invalid` and `null`), checks `OPTIONS` preflight, and flags `Access-Control-Allow-Credentials: true` with `Access-Contr[...]
+- **Session**: on login-like paths, compares session cookies between two unauthenticated GETs (stable value → informational fixation hint) and notes session-like cookies on HTTPS without `SameS[...]
+- **SSRF**: for URLs with "URL-like" query parameters, injects a unique per-probe **Interactsh** hostname (`https://…oast…`) and polls for HTTP/DNS callbacks. Controlled by `-oast-server`[...]
 
 ### Phase 12: IDOR surface (static)
 
-Runs after phase 11. This pass is **read-only**: it inspects crawl URLs locally for patterns that often warrant manual insecure-direct-object-reference review (numeric or UUID-like path segments after REST-style resource names, `*_id` / known object query keys, numeric `id=` values). It does **not** substitute other users’ identifiers or issue extra HTTP requests, so it cannot by itself access foreign objects. Tagged rows appear as informational “IDOR surface” findings in the report.
+Runs after phase 11. This pass is **read-only**: it inspects crawl URLs locally for patterns that often warrant manual insecure-direct-object-reference review (numeric or UUID-like path segments [...]
 
 ## Reports
 
@@ -609,6 +623,10 @@ For direct `pentest`, supported phase values are `1` through `12`.
 - JS parsing and endpoint extraction intentionally prefer breadth over perfect semantic accuracy
 - TUI is intended for the pentest phase, not as a full-screen wrapper around the entire crawl pipeline
 - phase display for background TUI scans is updated by polling the log file every 250ms
+
+## 💬 Feedback & Questions?
+
+Found a bug? Have an idea? Just want to chat about web security? Open an issue or [reach out](https://github.com/iluaii). This is a solo project made with ❤️, and community input keeps it sharp.
 
 ## Legal
 
